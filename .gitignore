@@ -60,4 +60,9 @@ opencode.jsonc
 .env*.local
 .claude/*
 .security
-transcript-analysis
+transcript-analysi
+
+attach_server.md
+my_workspace/
+openwork_architecture_and_setup.md
+querying_backend.md

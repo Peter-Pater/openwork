@@ -24,6 +24,10 @@ const GOOGLE_WORKSPACE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/gmail.compose",
   "https://www.googleapis.com/auth/drive.file",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/presentations",
+  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
 export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
@@ -94,6 +98,238 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         fileId: { type: "string", description: "Google Drive file id." },
       },
       required: ["fileId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "docs_create_document",
+    title: "Create Google Doc",
+    description: "Create a new empty Google Docs document with a title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "The title of the new document." },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "docs_read_document",
+    title: "Read Google Doc",
+    description: "Read the structure and text content of a Google Docs document by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The Google Docs document ID." },
+      },
+      required: ["documentId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "docs_update_document",
+    title: "Update Google Doc",
+    description: "Apply batch updates (inserts, deletions) to a Google Docs document by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        documentId: { type: "string", description: "The Google Docs document ID." },
+        requests: {
+          type: "array",
+          items: { type: "object" },
+          description: "List of Google Docs API batchUpdate requests (e.g. insertText, deleteContentRange).",
+        },
+      },
+      required: ["documentId", "requests"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "slides_create_presentation",
+    title: "Create Google Slides presentation",
+    description: "Create a new empty Google Slides presentation with a title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "The title of the new presentation." },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "slides_read_presentation",
+    title: "Read Google Slides presentation",
+    description: "Read the structure and slides of a Google Slides presentation by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "The Google Slides presentation ID." },
+      },
+      required: ["presentationId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "slides_update_presentation",
+    title: "Update Google Slides presentation",
+    description: "Apply batch updates (create slide, insert text/images) to a Google Slides presentation by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        presentationId: { type: "string", description: "The Google Slides presentation ID." },
+        requests: {
+          type: "array",
+          items: { type: "object" },
+          description: "List of Google Slides API batchUpdate requests (e.g. createSlide, insertText).",
+        },
+      },
+      required: ["presentationId", "requests"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "sheets_create_spreadsheet",
+    title: "Create Google Sheet",
+    description: "Create a new empty Google Sheets spreadsheet with a title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "The title of the new spreadsheet." },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "sheets_read_spreadsheet",
+    title: "Read Google Sheet Structure",
+    description: "Read the structure, metadata, and sheet names of a Google Sheets spreadsheet by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "The Google Sheets spreadsheet ID." },
+      },
+      required: ["spreadsheetId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "sheets_get_values",
+    title: "Get Spreadsheet Cell Values",
+    description: "Retrieve cell values from a specific sheet range (e.g., 'Sheet1!A1:B10').",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "The Google Sheets spreadsheet ID." },
+        range: { type: "string", description: "The A1 notation range to retrieve (e.g. 'Sheet1!A1:D100')." },
+      },
+      required: ["spreadsheetId", "range"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "sheets_update_values",
+    title: "Update Spreadsheet Cell Values",
+    description: "Write cell values to a specific sheet range.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "The Google Sheets spreadsheet ID." },
+        range: { type: "string", description: "The A1 notation range to update (e.g. 'Sheet1!A1')." },
+        values: {
+          type: "array",
+          items: { type: "array", items: {} },
+          description: "A two-dimensional array of cell values to write.",
+        },
+      },
+      required: ["spreadsheetId", "range", "values"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "sheets_update_spreadsheet",
+    title: "Update Google Sheet Layout/Formatting",
+    description: "Apply batch updates (add sheets, format cells, resize columns) to a Google Sheets spreadsheet by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spreadsheetId: { type: "string", description: "The Google Sheets spreadsheet ID." },
+        requests: {
+          type: "array",
+          items: { type: "object" },
+          description: "List of Google Sheets API batchUpdate requests (e.g. addSheet, updateCells).",
+        },
+      },
+      required: ["spreadsheetId", "requests"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_list_messages",
+    title: "List Gmail Messages",
+    description: "List email messages in the user's mailbox with optional search filter q.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", description: "Query string for filtering messages (e.g. 'from:somebody@example.com')." },
+        maxResults: { type: "number", description: "Maximum messages to return." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_get_message",
+    title: "Get Gmail Message Details",
+    description: "Retrieve details of a specific email message by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The Gmail message ID." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_list_threads",
+    title: "List Gmail Threads",
+    description: "List email threads in the user's mailbox with optional search filter q.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", description: "Query string for filtering threads." },
+        maxResults: { type: "number", description: "Maximum threads to return." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_get_thread",
+    title: "Get Gmail Thread Details",
+    description: "Retrieve details of a specific email thread by ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The Gmail thread ID." },
+      },
+      required: ["id"],
       additionalProperties: false,
     },
   },
@@ -530,6 +766,169 @@ async function googleWorkspaceReadFile(config: ServerConfig, args: Record<string
   return { metadata, content };
 }
 
+async function googleWorkspaceCreateDocument(config: ServerConfig, args: Record<string, unknown>) {
+  const title = readStringField(args, "title");
+  if (!title) throw new ApiError(400, "invalid_payload", "title is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson("https://docs.googleapis.com/v1/documents", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+async function googleWorkspaceReadDocument(config: ServerConfig, args: Record<string, unknown>) {
+  const documentId = readStringField(args, "documentId");
+  if (!documentId) throw new ApiError(400, "invalid_payload", "documentId is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(documentId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceUpdateDocument(config: ServerConfig, args: Record<string, unknown>) {
+  const documentId = readStringField(args, "documentId");
+  const requests = Array.isArray(args.requests) ? args.requests : null;
+  if (!documentId || !requests) throw new ApiError(400, "invalid_payload", "documentId and requests are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://docs.googleapis.com/v1/documents/${encodeURIComponent(documentId)}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests }),
+  });
+}
+
+async function googleWorkspaceCreatePresentation(config: ServerConfig, args: Record<string, unknown>) {
+  const title = readStringField(args, "title");
+  if (!title) throw new ApiError(400, "invalid_payload", "title is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson("https://slides.googleapis.com/v1/presentations", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+async function googleWorkspaceReadPresentation(config: ServerConfig, args: Record<string, unknown>) {
+  const presentationId = readStringField(args, "presentationId");
+  if (!presentationId) throw new ApiError(400, "invalid_payload", "presentationId is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://slides.googleapis.com/v1/presentations/${encodeURIComponent(presentationId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceUpdatePresentation(config: ServerConfig, args: Record<string, unknown>) {
+  const presentationId = readStringField(args, "presentationId");
+  const requests = Array.isArray(args.requests) ? args.requests : null;
+  if (!presentationId || !requests) throw new ApiError(400, "invalid_payload", "presentationId and requests are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://slides.googleapis.com/v1/presentations/${encodeURIComponent(presentationId)}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests }),
+  });
+}
+
+async function googleWorkspaceCreateSpreadsheet(config: ServerConfig, args: Record<string, unknown>) {
+  const title = readStringField(args, "title");
+  if (!title) throw new ApiError(400, "invalid_payload", "title is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson("https://sheets.googleapis.com/v4/spreadsheets", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ properties: { title } }),
+  });
+}
+
+async function googleWorkspaceReadSpreadsheet(config: ServerConfig, args: Record<string, unknown>) {
+  const spreadsheetId = readStringField(args, "spreadsheetId");
+  if (!spreadsheetId) throw new ApiError(400, "invalid_payload", "spreadsheetId is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceGetValues(config: ServerConfig, args: Record<string, unknown>) {
+  const spreadsheetId = readStringField(args, "spreadsheetId");
+  const range = readStringField(args, "range");
+  if (!spreadsheetId || !range) throw new ApiError(400, "invalid_payload", "spreadsheetId and range are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceUpdateValues(config: ServerConfig, args: Record<string, unknown>) {
+  const spreadsheetId = readStringField(args, "spreadsheetId");
+  const range = readStringField(args, "range");
+  const values = Array.isArray(args.values) ? args.values : null;
+  if (!spreadsheetId || !range || !values) throw new ApiError(400, "invalid_payload", "spreadsheetId, range, and values are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`);
+  url.searchParams.set("valueInputOption", "USER_ENTERED");
+  return fetchGoogleJson(url.toString(), {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+}
+
+async function googleWorkspaceUpdateSpreadsheet(config: ServerConfig, args: Record<string, unknown>) {
+  const spreadsheetId = readStringField(args, "spreadsheetId");
+  const requests = Array.isArray(args.requests) ? args.requests : null;
+  if (!spreadsheetId || !requests) throw new ApiError(400, "invalid_payload", "spreadsheetId and requests are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ requests }),
+  });
+}
+
+async function googleWorkspaceListMessages(config: ServerConfig, args: Record<string, unknown>) {
+  const q = readStringField(args, "q");
+  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10), 1), 100);
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+  if (q) url.searchParams.set("q", q);
+  url.searchParams.set("maxResults", String(maxResults));
+  return fetchGoogleJson(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceGetMessage(config: ServerConfig, args: Record<string, unknown>) {
+  const id = readStringField(args, "id");
+  if (!id) throw new ApiError(400, "invalid_payload", "id is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceListThreads(config: ServerConfig, args: Record<string, unknown>) {
+  const q = readStringField(args, "q");
+  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10), 1), 100);
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/threads");
+  if (q) url.searchParams.set("q", q);
+  url.searchParams.set("maxResults", String(maxResults));
+  return fetchGoogleJson(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+async function googleWorkspaceGetThread(config: ServerConfig, args: Record<string, unknown>) {
+  const id = readStringField(args, "id");
+  if (!id) throw new ApiError(400, "invalid_payload", "id is required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
 export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, action: string, args: Record<string, unknown>, context: Record<string, unknown>) {
   if (action === "status") {
     return {
@@ -544,6 +943,21 @@ export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, a
   if (action === "gmail_create_draft") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateDraft(config, args), context };
   if (action === "drive_search_files") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceSearchFiles(config, args), context };
   if (action === "drive_read_file") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceReadFile(config, args), context };
+  if (action === "docs_create_document") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateDocument(config, args), context };
+  if (action === "docs_read_document") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceReadDocument(config, args), context };
+  if (action === "docs_update_document") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateDocument(config, args), context };
+  if (action === "slides_create_presentation") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreatePresentation(config, args), context };
+  if (action === "slides_read_presentation") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceReadPresentation(config, args), context };
+  if (action === "slides_update_presentation") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdatePresentation(config, args), context };
+  if (action === "sheets_create_spreadsheet") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateSpreadsheet(config, args), context };
+  if (action === "sheets_read_spreadsheet") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceReadSpreadsheet(config, args), context };
+  if (action === "sheets_get_values") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetValues(config, args), context };
+  if (action === "sheets_update_values") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateValues(config, args), context };
+  if (action === "sheets_update_spreadsheet") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateSpreadsheet(config, args), context };
+  if (action === "gmail_list_messages") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListMessages(config, args), context };
+  if (action === "gmail_get_message") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetMessage(config, args), context };
+  if (action === "gmail_list_threads") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListThreads(config, args), context };
+  if (action === "gmail_get_thread") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetThread(config, args), context };
   return null;
 }
 

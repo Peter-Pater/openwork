@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { ServerConfig } from "../types.js";
-import { googleWorkspaceDisconnect, googleWorkspaceStatus } from "./google-workspace.js";
+import { callGoogleWorkspaceExtensionAction, googleWorkspaceDisconnect, googleWorkspaceStatus } from "./google-workspace.js";
 
 function createTestConfig(): ServerConfig {
   const tempDir = join(
@@ -120,5 +120,291 @@ describe("Google Workspace extension", () => {
     expect(status.connected).toBe(true);
     expect(status.accounts.map((account) => account.email)).toEqual(["two@example.com"]);
     expect(status.activeAccountId).toBe("sub-two");
+  });
+
+  test("creates a google document", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    let calledInit: any = undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        calledInit = init;
+        return new Response(JSON.stringify({ documentId: "doc-123", title: "My Document" }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+    
+    const result = await callGoogleWorkspaceExtensionAction(config, "docs_create_document", { title: "My Document" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://docs.googleapis.com/v1/documents");
+    expect(calledInit?.method).toBe("POST");
+    expect(JSON.parse(calledInit?.body as string)).toEqual({ title: "My Document" });
+  });
+
+  test("reads a google document", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ documentId: "doc-123", title: "My Document", body: { content: [] } }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "docs_read_document", { documentId: "doc-123" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://docs.googleapis.com/v1/documents/doc-123");
+  });
+
+  test("updates a google document", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    let calledInit: any = undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        calledInit = init;
+        return new Response(JSON.stringify({ documentId: "doc-123" }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const requests = [{ insertText: { text: "Hello", location: { index: 1 } } }];
+       const result = await callGoogleWorkspaceExtensionAction(config, "docs_update_document", { documentId: "doc-123", requests }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://docs.googleapis.com/v1/documents/doc-123:batchUpdate");
+    expect(calledInit?.method).toBe("POST");
+    expect(JSON.parse(calledInit?.body as string)).toEqual({ requests });
+  });
+
+  test("creates a google slides presentation", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    let calledInit: any = undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        calledInit = init;
+        return new Response(JSON.stringify({ presentationId: "slides-123", title: "My Presentation" }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "slides_create_presentation", { title: "My Presentation" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://slides.googleapis.com/v1/presentations");
+    expect(calledInit?.method).toBe("POST");
+    expect(JSON.parse(calledInit?.body as string)).toEqual({ title: "My Presentation" });
+  });
+
+  test("creates a google spreadsheet", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    let calledInit: any = undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        calledInit = init;
+        return new Response(JSON.stringify({ spreadsheetId: "sheet-123", properties: { title: "My Sheet" } }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "sheets_create_spreadsheet", { title: "My Sheet" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://sheets.googleapis.com/v4/spreadsheets");
+    expect(calledInit?.method).toBe("POST");
+    expect(JSON.parse(calledInit?.body as string)).toEqual({ properties: { title: "My Sheet" } });
+  });
+
+  test("gets spreadsheet cell values", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ spreadsheetId: "sheet-123", range: "Sheet1!A1:B2", values: [["A", "B"], ["C", "D"]] }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "sheets_get_values", { spreadsheetId: "sheet-123", range: "Sheet1!A1:B2" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Sheet1!A1%3AB2");
+  });
+
+  test("updates spreadsheet cell values", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    let calledInit: any = undefined;
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        calledInit = init;
+        return new Response(JSON.stringify({ spreadsheetId: "sheet-123" }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const values = [["A", "B"], ["C", "D"]];
+    const result = await callGoogleWorkspaceExtensionAction(config, "sheets_update_values", { spreadsheetId: "sheet-123", range: "Sheet1!A1:B2", values }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/Sheet1!A1%3AB2?valueInputOption=USER_ENTERED");
+    expect(calledInit?.method).toBe("PUT");
+    expect(JSON.parse(calledInit?.body as string)).toEqual({ values });
+  });
+
+  test("lists gmail messages", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ messages: [{ id: "msg-123", threadId: "th-123" }] }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "gmail_list_messages", { q: "from:test", maxResults: 5 }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Atest&maxResults=5");
+  });
+
+  test("gets gmail message details", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ id: "msg-123", snippet: "Hello world" }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "gmail_get_message", { id: "msg-123" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages/msg-123");
+  });
+
+  test("lists gmail threads", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ threads: [{ id: "th-123", snippet: "Thread snippet" }] }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "gmail_list_threads", { q: "subject:test", maxResults: 3 }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://gmail.googleapis.com/gmail/v1/users/me/threads?q=subject%3Atest&maxResults=3");
+  });
+
+  test("gets gmail thread details", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    let calledUrl = "";
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calledUrl = String(input);
+        return new Response(JSON.stringify({ id: "th-123", messages: [] }), { status: 200 });
+      },
+      { preconnect: previousFetch.preconnect }
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    const result = await callGoogleWorkspaceExtensionAction(config, "gmail_get_thread", { id: "th-123" }, {});
+    expect(result?.ok).toBe(true);
+    expect(calledUrl).toBe("https://gmail.googleapis.com/gmail/v1/users/me/threads/th-123");
   });
 });
