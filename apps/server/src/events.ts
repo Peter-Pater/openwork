@@ -52,3 +52,28 @@ export class ReloadEventStore {
     return this.seq;
   }
 }
+
+class SpatialEventsBroker {
+  private listeners = new Set<(event: any) => void>();
+
+  addListener(listener: (event: any) => void) {
+    this.listeners.add(listener);
+  }
+
+  removeListener(listener: (event: any) => void) {
+    this.listeners.delete(listener);
+  }
+
+  emit(event: any) {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.error("Error dispatching spatial event:", err);
+      }
+    }
+  }
+}
+
+export const spatialEventsBroker = new SpatialEventsBroker();
+

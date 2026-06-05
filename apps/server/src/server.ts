@@ -65,6 +65,7 @@ import {
   googleWorkspaceRunScopeSmokeTest,
   googleWorkspaceStatus,
   googleWorkspaceTestConnection,
+  googleWorkspaceListFiles,
 } from "./extensions/google-workspace.js";
 import { callExperimentalExtensionAction, listExperimentalExtensionActions } from "./extensions/index.js";
 import {
@@ -73,6 +74,7 @@ import {
   type RuntimeOpencodeConfig,
   writeRuntimeOpencodeConfig,
 } from "./runtime-opencode-config-store.js";
+import { spatialEventsBroker } from "./events.js";
 import {
   mergeOpenworkWorkspaceConfigs,
   readOpenworkWorkspaceConfig,
@@ -1810,6 +1812,62 @@ function serializeWorkspace(workspace: ServerConfig["workspaces"][number]) {
   };
 }
 
+let activeListenersCount = 0;
+let pollTimer: any = null;
+let previousSessionsState: Map<string, string> = new Map();
+
+function startSpatialPolling(config: ServerConfig) {
+  if (pollTimer) return;
+  previousSessionsState.clear();
+
+  pollTimer = setInterval(async () => {
+    try {
+      const activeWorkspace = config.workspaces[0];
+      if (!activeWorkspace) return;
+
+      const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+      const [sessionsRes, statusesRes] = await Promise.all([
+        opencode.session.list({ limit: 50 }),
+        opencode.session.status(),
+      ]);
+
+      const sessionItems = buildSessionList(unwrapOpencodeResult(sessionsRes, "/session"));
+      const statuses = buildSessionStatuses(unwrapOpencodeResult(statusesRes, "/session/status"));
+
+      const currentSessions = new Map<string, string>();
+      for (const item of sessionItems) {
+        const statusType = statuses[item.id]?.type ?? "idle";
+        currentSessions.set(item.id, statusType);
+      }
+
+      for (const [id, status] of currentSessions) {
+        if (!previousSessionsState.has(id)) {
+          spatialEventsBroker.emit({ type: "session_changed", action: "created", sessionId: id, status });
+        } else if (previousSessionsState.get(id) !== status) {
+          spatialEventsBroker.emit({ type: "session_changed", action: "status_changed", sessionId: id, status });
+        }
+      }
+
+      for (const id of previousSessionsState.keys()) {
+        if (!currentSessions.has(id)) {
+          spatialEventsBroker.emit({ type: "session_changed", action: "deleted", sessionId: id });
+        }
+      }
+
+      previousSessionsState = currentSessions;
+    } catch (err) {
+      // Ignore background errors
+    }
+  }, 3000);
+}
+
+function stopSpatialPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
 function createRoutes(
   config: ServerConfig,
   approvals: ApprovalService,
@@ -2083,6 +2141,72 @@ function createRoutes(
 
   addRoute(routes, "POST", "/experimental/google-workspace/smoke-test", "client", async () => {
     return jsonResponse(await googleWorkspaceRunScopeSmokeTest(config));
+  });
+
+  addRoute(routes, "GET", "/experimental/google-workspace/files", "none", async () => {
+    return jsonResponse(await googleWorkspaceListFiles(config));
+  });
+
+  addRoute(routes, "GET", "/experimental/spatial/status", "none", async () => {
+    const active = config.workspaces[0] ?? null;
+    return jsonResponse({ activeWorkspaceId: active?.id ?? null });
+  });
+
+  addRoute(routes, "GET", "/experimental/spatial/sessions", "none", async () => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) {
+      return jsonResponse({ items: [] });
+    }
+    const items = await listWorkspaceSessions(config, activeWorkspace, { limit: 50 });
+    return jsonResponse({ items: items ?? [] });
+  });
+
+  addRoute(routes, "GET", "/experimental/spatial/events", "none", async (ctx) => {
+    const signal = ctx.request.signal;
+    const headers = new Headers({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const heartbeatInterval = setInterval(() => {
+          try {
+            controller.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
+          } catch (e) {}
+        }, 15000);
+
+        const listener = (event: any) => {
+          try {
+            const formatted = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(new TextEncoder().encode(formatted));
+          } catch (err) {}
+        };
+
+        spatialEventsBroker.addListener(listener);
+        activeListenersCount++;
+
+        if (activeListenersCount === 1) {
+          startSpatialPolling(config);
+        }
+
+        signal.addEventListener("abort", () => {
+          clearInterval(heartbeatInterval);
+          spatialEventsBroker.removeListener(listener);
+          activeListenersCount--;
+          if (activeListenersCount === 0) {
+            stopSpatialPolling();
+          }
+          try {
+            controller.close();
+          } catch (e) {}
+        });
+      }
+    });
+
+    return new Response(stream, { headers });
   });
 
   addRoute(routes, "GET", "/workspaces", "client", async () => {

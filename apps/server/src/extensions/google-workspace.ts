@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 
 import { ApiError } from "../errors.js";
 import type { ServerConfig } from "../types.js";
+import { spatialEventsBroker } from "../events.js";
 
 export const GOOGLE_WORKSPACE_EXTENSION_ID = "google-workspace";
 
@@ -770,11 +771,23 @@ async function googleWorkspaceCreateDocument(config: ServerConfig, args: Record<
   const title = readStringField(args, "title");
   if (!title) throw new ApiError(400, "invalid_payload", "title is required");
   const { accessToken } = await googleWorkspaceAccessToken(config);
-  return fetchGoogleJson("https://docs.googleapis.com/v1/documents", {
+  const result = await fetchGoogleJson("https://docs.googleapis.com/v1/documents", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
+  if (result && typeof (result as any).documentId === "string") {
+    spatialEventsBroker.emit({
+      type: "gws_file_changed",
+      action: "create",
+      file: {
+        id: (result as any).documentId,
+        name: title || "Untitled Document",
+        mimeType: "application/vnd.google-apps.document",
+      },
+    });
+  }
+  return result;
 }
 
 async function googleWorkspaceReadDocument(config: ServerConfig, args: Record<string, unknown>) {
@@ -802,11 +815,23 @@ async function googleWorkspaceCreatePresentation(config: ServerConfig, args: Rec
   const title = readStringField(args, "title");
   if (!title) throw new ApiError(400, "invalid_payload", "title is required");
   const { accessToken } = await googleWorkspaceAccessToken(config);
-  return fetchGoogleJson("https://slides.googleapis.com/v1/presentations", {
+  const result = await fetchGoogleJson("https://slides.googleapis.com/v1/presentations", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
+  if (result && typeof (result as any).presentationId === "string") {
+    spatialEventsBroker.emit({
+      type: "gws_file_changed",
+      action: "create",
+      file: {
+        id: (result as any).presentationId,
+        name: title || "Untitled Presentation",
+        mimeType: "application/vnd.google-apps.presentation",
+      },
+    });
+  }
+  return result;
 }
 
 async function googleWorkspaceReadPresentation(config: ServerConfig, args: Record<string, unknown>) {
@@ -834,11 +859,23 @@ async function googleWorkspaceCreateSpreadsheet(config: ServerConfig, args: Reco
   const title = readStringField(args, "title");
   if (!title) throw new ApiError(400, "invalid_payload", "title is required");
   const { accessToken } = await googleWorkspaceAccessToken(config);
-  return fetchGoogleJson("https://sheets.googleapis.com/v4/spreadsheets", {
+  const result = await fetchGoogleJson("https://sheets.googleapis.com/v4/spreadsheets", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ properties: { title } }),
   });
+  if (result && typeof (result as any).spreadsheetId === "string") {
+    spatialEventsBroker.emit({
+      type: "gws_file_changed",
+      action: "create",
+      file: {
+        id: (result as any).spreadsheetId,
+        name: title || "Untitled Spreadsheet",
+        mimeType: "application/vnd.google-apps.spreadsheet",
+      },
+    });
+  }
+  return result;
 }
 
 async function googleWorkspaceReadSpreadsheet(config: ServerConfig, args: Record<string, unknown>) {
@@ -927,6 +964,15 @@ async function googleWorkspaceGetThread(config: ServerConfig, args: Record<strin
   return fetchGoogleJson(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+}
+
+export async function googleWorkspaceListFiles(config: ServerConfig) {
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  const url = new URL("https://www.googleapis.com/drive/v3/files");
+  url.searchParams.set("q", "trashed = false");
+  url.searchParams.set("pageSize", "100");
+  url.searchParams.set("fields", "files(id,name,mimeType,webViewLink,modifiedTime,size)");
+  return fetchGoogleJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
 }
 
 export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, action: string, args: Record<string, unknown>, context: Record<string, unknown>) {
