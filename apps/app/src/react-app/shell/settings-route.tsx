@@ -16,6 +16,7 @@ import {
 } from "@/app/lib/openwork-server";
 import { resolveWorkspaceEndpoint } from "@/app/lib/workspace-endpoint";
 import { buildOpenworkEnvRuntimeKey } from "@/app/lib/openwork-env-runtime";
+import { DEVELOPER_MODE_STORAGE_KEY, isDeveloperModeEnabled } from "@/app/lib/developer-mode";
 import {
   getInitialThemeMode,
   setThemeMode as setAppThemeMode,
@@ -494,10 +495,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
   const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
   const [providerConnectedIds, setProviderConnectedIds] = useState<string[]>([]);
   const [disabledProviders, setDisabledProviders] = useState<string[]>([]);
-  const [developerMode, setDeveloperMode] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("openwork.developerMode") === "1";
-  });
+  const [developerMode, setDeveloperMode] = useState(() => isDeveloperModeEnabled());
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getInitialThemeMode);
   const [hideTitlebar, setHideTitlebar] = useState(() => readStoredBoolean(SETTINGS_HIDE_TITLEBAR_KEY, false));
   const [updateAutoCheck, setUpdateAutoCheck] = useState(() =>
@@ -2291,7 +2289,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             developerMode={developerMode}
             toggleDeveloperMode={() => setDeveloperMode((current) => {
               const next = !current;
-              try { window.localStorage.setItem("openwork.developerMode", next ? "1" : "0"); } catch {}
+              try { window.localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, next ? "1" : "0"); } catch {}
               return next;
             })}
             opencodeDevModeEnabled={false}

@@ -4,11 +4,11 @@
   "version": "0.15.1",
   "type": "module",
   "scripts": {
-    "dev": "OPENWORK_DEV_MODE=1 vite",
+    "dev": "cross-env OPENWORK_DEV_MODE=1 vite",
     "dev:windows": "vite",
     "prebuild": "pnpm --dir ../../packages/ui build",
     "build": "vite build",
-    "dev:web": "OPENWORK_DEV_MODE=1 vite",
+    "dev:web": "cross-env OPENWORK_DEV_MODE=1 vite",
     "prebuild:web": "pnpm --dir ../../packages/ui build",
     "build:web": "vite build",
     "preview": "vite preview",

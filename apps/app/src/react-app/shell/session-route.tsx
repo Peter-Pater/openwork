@@ -33,6 +33,7 @@ import {
   type ResolvedWorkspaceEndpoint,
 } from "@/app/lib/workspace-endpoint";
 import { buildOpenworkEnvRuntimeKey } from "@/app/lib/openwork-env-runtime";
+import { isDeveloperModeEnabled } from "@/app/lib/developer-mode";
 import {
   engineInfo,
   revealDesktopItemInDir,
@@ -2843,7 +2844,7 @@ export function SessionRoute() {
       openworkServerStatus={client ? "connected" : "disconnected"}
       openworkServerClient={selectedWorkspaceEndpoint?.client ?? client}
       openworkServerToken={selectedWorkspaceServerToken}
-      developerMode={typeof window !== "undefined" && window.localStorage.getItem("openwork.developerMode") === "1"}
+      developerMode={isDeveloperModeEnabled()}
       headerStatus={canCreateTask ? t("status.connected") : t("session.loading_detail")}
       busyHint={effectiveLoading ? t("session.loading_detail") : null}
       startupPhase={effectiveLoading ? "nativeInit" : "ready"}
