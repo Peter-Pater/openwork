@@ -2161,6 +2161,58 @@ function createRoutes(
     return jsonResponse({ items: items ?? [] });
   });
 
+  // Spatial (XR) clients have no auth token, so they cannot use the
+  // token-gated opencode proxy. This mirrors the read-only spatial endpoints
+  // and forwards a pre-coded prompt to the session via the workspace opencode
+  // client, letting the agent start working on it.
+  addRoute(routes, "POST", "/experimental/spatial/sessions/:id/prompt", "none", async (ctx) => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
+    const sessionId = ctx.params.id;
+    if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
+    const body = await readJsonBody(ctx.request);
+    const text = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (!text) throw new ApiError(400, "bad_request", "Missing prompt");
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+
+    // Resolve the session's configured model/agent and reuse them. prompt_async
+    // with no model falls back to opencode's global default model (which may be
+    // stale/unavailable), so we run the same model the user picked in the UI —
+    // the session object carries it.
+    const session = unwrapOpencodeResult(
+      await opencode.session.get({ sessionID: sessionId }),
+      `/session/${sessionId}`,
+    ) as {
+      agent?: string;
+      model?: { id?: string; modelID?: string; providerID?: string; variant?: string };
+    };
+    const sessionModel = session?.model;
+    const modelId = sessionModel?.id ?? sessionModel?.modelID;
+    const model =
+      sessionModel?.providerID && modelId ? { providerID: sessionModel.providerID, modelID: modelId } : undefined;
+
+    // prompt_async is fire-and-forget: it returns an empty 200 body, so we
+    // can't use unwrapOpencodeResult (which treats an empty body as an error).
+    // Only surface a genuine transport/HTTP error.
+    const result = await opencode.session.promptAsync({
+      sessionID: sessionId,
+      ...(model ? { model } : {}),
+      ...(session?.agent ? { agent: session.agent } : {}),
+      ...(sessionModel?.variant ? { variant: sessionModel.variant } : {}),
+      parts: [{ type: "text", text }],
+    });
+    if (result.error !== undefined) {
+      throw new ApiError(502, "opencode_request_failed", "OpenCode prompt failed", {
+        status: result.response?.status,
+        body: result.error,
+        path: `/session/${sessionId}/prompt_async`,
+      });
+    }
+    const data = result.data as { id?: unknown } | null | undefined;
+    const messageId = data && typeof data.id === "string" ? data.id : null;
+    return jsonResponse({ ok: true, sessionId, model: model ?? null, messageId });
+  });
+
   addRoute(routes, "GET", "/experimental/spatial/events", "none", async (ctx) => {
     const signal = ctx.request.signal;
     const headers = new Headers({
