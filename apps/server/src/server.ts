@@ -1815,10 +1815,49 @@ function serializeWorkspace(workspace: ServerConfig["workspaces"][number]) {
 let activeListenersCount = 0;
 let pollTimer: any = null;
 let previousSessionsState: Map<string, string> = new Map();
+let eventSubAbortController: AbortController | null = null;
+
+async function startSpatialEventSubscription(config: ServerConfig, activeWorkspace: WorkspaceInfo) {
+  if (eventSubAbortController) return;
+  eventSubAbortController = new AbortController();
+  const signal = eventSubAbortController.signal;
+
+  console.log(`[Spatial Server] Subscribing to Opencode event stream…`);
+
+  try {
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    const sub = await opencode.event.subscribe(undefined, { signal });
+    
+    for await (const raw of sub.stream) {
+      if (signal.aborted) return;
+      if (raw && typeof raw === "object" && "type" in raw) {
+        const type = (raw as any).type;
+        console.log(`[Spatial Server] Event received: ${type}`);
+        if (type === "message.part.updated") {
+          spatialEventsBroker.emit(raw);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[Spatial Server] Event subscription error:`, err);
+    if (!signal.aborted) {
+      eventSubAbortController = null;
+      setTimeout(() => {
+        const ws = config.workspaces[0];
+        if (ws) startSpatialEventSubscription(config, ws);
+      }, 5000);
+    }
+  }
+}
 
 function startSpatialPolling(config: ServerConfig) {
   if (pollTimer) return;
   previousSessionsState.clear();
+
+  const activeWorkspace = config.workspaces[0];
+  if (activeWorkspace) {
+    void startSpatialEventSubscription(config, activeWorkspace);
+  }
 
   pollTimer = setInterval(async () => {
     try {
@@ -1865,6 +1904,10 @@ function stopSpatialPolling() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (eventSubAbortController) {
+    eventSubAbortController.abort();
+    eventSubAbortController = null;
   }
 }
 
