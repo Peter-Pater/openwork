@@ -2188,8 +2188,46 @@ function createRoutes(
     };
     const sessionModel = session?.model;
     const modelId = sessionModel?.id ?? sessionModel?.modelID;
-    const model =
+    let model =
       sessionModel?.providerID && modelId ? { providerID: sessionModel.providerID, modelID: modelId } : undefined;
+
+    // Fall back to workspace default provider/model if none is set on the session yet
+    if (!model) {
+      try {
+        const connection = resolveWorkspaceOpencodeConnection(config, activeWorkspace);
+        const res = await fetch(`${connection.baseUrl}/config/providers`, {
+          headers: connection.authHeader ? { Authorization: connection.authHeader } : {},
+        });
+        if (res.ok) {
+          const providers = (await res.json());
+          const def = providers?.default;
+          if (def && typeof def === "object") {
+            const entries = Object.entries(def);
+            if (entries.length) {
+              const providerID = entries[0][0];
+              const modelID = entries[0][1];
+              if (providerID && typeof modelID === "string") {
+                model = { providerID, modelID };
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // ignore resolving errors
+      }
+    }
+
+    // Rewrite deprecated/non-existent models to a valid fallback
+    const isDeprecated = (id: string) =>
+      /^(google\/|opencode\/)?(gemini-3-pro|gemini-3-pro-preview|gemini-3\.1-pro-preview|gemini-3\.1-pro-preview-customtools|big-pickle)/i.test(id);
+
+    if (
+      !model ||
+      isDeprecated(model.modelID) ||
+      isDeprecated(`${model.providerID}/${model.modelID}`)
+    ) {
+      model = { providerID: "google", modelID: "gemini-3.5-flash" };
+    }
 
     // prompt_async is fire-and-forget: it returns an empty 200 body, so we
     // can't use unwrapOpencodeResult (which treats an empty body as an error).
