@@ -6,6 +6,7 @@ import type { SessionStatus } from "@opencode-ai/sdk/v2/client";
 import { Check, Minimize2 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 
+import { captureAnalyticsEvent } from "@/app/lib/analytics";
 import { createClient, unwrap } from "@/app/lib/opencode";
 import { abortSessionSafe } from "@/app/lib/opencode-session";
 import { t } from "@/i18n";
@@ -29,10 +30,11 @@ import type {
 import {
   publishInspectorSlice,
   recordInspectorEvent,
-} from "@/react-app/shell/app-inspector";
+} from "@/app/lib/app-inspector";
 import { useControlAction, type OpenworkControlAction } from "@/react-app/shell/control/control-provider";
 import { ReactSessionComposer } from "./composer/composer";
-import { decodeComposerMentionValue, encodeComposerMentionValue } from "./composer/mention-encoding";
+import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./composer/mention-encoding";
+import { desktopBridge } from "@/app/lib/desktop";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 import { DevProfiler } from "@/react-app/shell/dev-profiler";
 import { PaperGrainGradient } from "@openwork/ui/react";
@@ -41,6 +43,7 @@ import { useReactRenderWatchdog } from "@/react-app/shell/react-render-watchdog"
 import { SessionDebugPanel } from "./debug-panel";
 import { deriveRenderedSessionMessages, resolveRenderedSessionSnapshot } from "./session-render-state";
 import { useLocal } from "@/react-app/kernel/local-provider";
+import { isModelReadableAttachment } from "@/react-app/domains/session/sync/attachment-support";
 import { deriveSessionRenderModel } from "@/react-app/domains/session/sync/transition-controller";
 import { useSessionScrollController } from "./scroll-controller";
 import { SessionScrollOverlay } from "./scroll-overlay";
@@ -52,14 +55,18 @@ import { deriveOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/reac
 import { usePanelTabStore } from "@/react-app/domains/session/panel/panel-tab-store";
 import {
   seedSessionState,
+  snapshotKey as reactSnapshotKey,
   statusKey as reactStatusKey,
   transcriptKey as reactTranscriptKey,
 } from "@/react-app/domains/session/sync/session-sync";
+import { resolveForkBoundaryId } from "@/react-app/domains/session/sync/transcript-reconcile";
 import {
   getComposerAttachments,
   getComposerDraft,
+  getComposerHistory,
   getComposerMentions,
   getComposerPasteParts,
+  getComposerQueuedDrafts,
   useComposerStateStore,
 } from "./composer-state-store";
 import { MessageList } from "@/components/chat/message-list";
@@ -95,7 +102,7 @@ export type SessionSurfaceProps = {
   selectedModel: ModelRef;
   onModelPickerOpenChange: (open: boolean) => void;
   onModelChange: (model: ModelRef) => void;
-  onSendDraft: (draft: ComposerDraft) => void;
+  onSendDraft: (draft: ComposerDraft, sessionId: string) => void;
   onDraftChange: (draft: ComposerDraft) => void;
   attachmentsEnabled: boolean;
   attachmentsDisabledReason: string | null;
@@ -124,9 +131,9 @@ export type SessionSurfaceProps = {
   onUploadInboxFiles?: ((files: File[], options?: { notify?: boolean }) => void | Promise<unknown>) | null;
   providerConnectedCount?: number;
   onOpenSettingsSection?: ((section: "commands" | "skills" | "mcps" | "plugins" | "providers") => void) | undefined;
-  onRevertToMessage?: (messageId: string) => void;
-  onForkAtMessage?: (messageId: string) => void;
-  onOpenTarget?: (target: OpenTarget, options?: { auto?: boolean }) => void;
+  onRevertToMessage?: (messageId: string, sessionId: string) => Promise<boolean>;
+  onForkAtMessage?: (messageId: string | null, sessionId: string) => void;
+  onOpenTarget?: (target: OpenTarget, options?: { auto?: boolean }, sessionId?: string) => void;
 };
 
 function messageToReadableText(message: UIMessage) {
@@ -399,12 +406,19 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const setComposerMentions = useComposerStateStore((state) => state.setMentions);
   const setComposerPasteParts = useComposerStateStore((state) => state.setPasteParts);
   const clearComposerSession = useComposerStateStore((state) => state.clearSession);
+  const inputHistory = useComposerStateStore((state) => getComposerHistory(state, props.sessionId));
+  const appendComposerHistory = useComposerStateStore((state) => state.appendHistory);
+  // Queued follow-up drafts live in the shared composer store keyed by session
+  // id. That keeps a queued message in session A from being drained into
+  // session B when the route swaps the same surface component to another
+  // session.
+  const queuedDrafts = useComposerStateStore((state) => getComposerQueuedDrafts(state, props.sessionId));
+  const appendQueuedDraft = useComposerStateStore((state) => state.appendQueuedDraft);
+  const removeQueuedDraftFromStore = useComposerStateStore((state) => state.removeQueuedDraft);
+  const clearQueuedDrafts = useComposerStateStore((state) => state.clearQueuedDrafts);
+  const prependQueuedDrafts = useComposerStateStore((state) => state.prependQueuedDrafts);
   const [error, setError] = useState<SessionError | null>(null);
   const [sending, setSending] = useState(false);
-  // Locally queued follow-up drafts. OpenCode has no server-side queue, so we
-  // hold these client-side and auto-send the first one once the session goes
-  // idle (see the drain effect below).
-  const [queuedDrafts, setQueuedDrafts] = useState<ComposerDraft[]>([]);
   const [showDelayedLoading, setShowDelayedLoading] = useState(false);
   const [awaitingAssistantBaseline, setAwaitingAssistantBaseline] = useState<number | null>(null);
   const [rendered, setRendered] = useState<{ sessionId: string; snapshot: OpenworkSessionSnapshot } | null>(null);
@@ -424,7 +438,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
   );
 
   const snapshotQueryKey = useMemo(
-    () => ["react-session-snapshot", props.workspaceId, props.sessionId],
+    () => reactSnapshotKey(props.workspaceId, props.sessionId),
     [props.workspaceId, props.sessionId],
   );
   const transcriptQueryKey = useMemo(
@@ -583,8 +597,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!autoOpenTarget || chatStreaming) return;
     if (autoOpenedTargetRef.current === autoOpenTarget.id) return;
     autoOpenedTargetRef.current = autoOpenTarget.id;
-    props.onOpenTarget?.(autoOpenTarget, { auto: true });
-  }, [autoOpenTarget, chatStreaming, props.onOpenTarget]);
+    props.onOpenTarget?.(autoOpenTarget, { auto: true }, props.sessionId);
+  }, [autoOpenTarget, chatStreaming, props.onOpenTarget, props.sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -671,6 +685,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         const kind = mentions[value];
         if (kind === "agent") return [{ type: "agent", name: value } satisfies ComposerDraft["parts"][number]];
         if (kind === "file") return [{ type: "file", path: value, label: value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "app") return [{ type: "app", name: value } satisfies ComposerDraft["parts"][number]];
       }
       return [{ type: "text", text: segment } satisfies ComposerDraft["parts"][number]];
     });
@@ -712,15 +727,18 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // up the new message — so this is safe to call while the agent is busy.
   const sendDraft = useCallback(async (nextDraft: ComposerDraft, draftAttachments: ComposerAttachment[]) => {
     setError(null);
+    // Record the prompt for Up/Down recall in the composer (#2012).
+    appendComposerHistory(props.sessionId, nextDraft.text);
     useSessionActivityStore.getState().setRunStatus(props.workspaceId, props.sessionId, { type: "busy" });
     setSending(true);
     setAwaitingAssistantBaseline(renderedMessages.length);
     try {
-      await props.onSendDraft(nextDraft);
+      await props.onSendDraft(nextDraft, props.sessionId);
       draftAttachments.forEach(revokeAttachmentPreview);
       setSending(false);
     } catch (nextError) {
       const parsed = parseSessionError(nextError);
+      captureAnalyticsEvent("task_send_failed", {});
       setError(parsed);
       useSessionActivityStore.getState().setError(props.workspaceId, props.sessionId, parsed.message);
       setComposerDraft(props.sessionId, "");
@@ -728,7 +746,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       setSending(false);
       throw nextError;
     }
-  }, [props.onSendDraft, props.sessionId, props.workspaceId, renderedMessages.length, setComposerDraft]);
+  }, [appendComposerHistory, props.onSendDraft, props.sessionId, props.workspaceId, renderedMessages.length, setComposerDraft]);
 
   const clearComposer = useCallback(() => {
     clearComposerSession(props.sessionId);
@@ -757,13 +775,13 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleQueue = useCallback(() => {
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
-    setQueuedDrafts((current) => [...current, buildDraft(text, attachments)]);
+    appendQueuedDraft(props.sessionId, buildDraft(text, attachments));
     clearComposer();
-  }, [attachments, buildDraft, clearComposer, draft]);
+  }, [appendQueuedDraft, attachments, buildDraft, clearComposer, draft, props.sessionId]);
 
   const removeQueuedDraft = useCallback((index: number) => {
-    setQueuedDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  }, []);
+    removeQueuedDraftFromStore(props.sessionId, index);
+  }, [props.sessionId, removeQueuedDraftFromStore]);
 
   // One label per queued draft, kept index-aligned with `queuedDrafts` so the
   // panel's remove action targets the correct entry. Attachment-only drafts
@@ -781,13 +799,26 @@ export function SessionSurface(props: SessionSurfaceProps) {
   const handleAbort = useCallback(async () => {
     if (!chatStreaming) return;
     setError(null);
-    try {
-      await abortSessionSafe(opencodeClient, props.sessionId);
-      await snapshotQuery.refetch();
-    } catch (nextError) {
-      setError({ message: nextError instanceof Error ? nextError.message : "Failed to stop run." });
+    // Stop means stop: drop queued follow-ups before aborting, otherwise the
+    // queue-drain effect below re-prompts the agent the moment the abort
+    // lands and the session reports idle (#2014).
+    clearQueuedDrafts(props.sessionId);
+    // The prompt was sent through a directory-scoped client (session-route
+    // passes the workspace root), so the abort must target the same scope —
+    // without it the server resolves the default project, finds no live run,
+    // and answers `200: false` while the stream keeps going (#2014).
+    const aborted = await abortSessionSafe(
+      opencodeClient,
+      props.sessionId,
+      props.workspaceRoot.trim() || undefined,
+    );
+    if (!aborted) {
+      setError({ message: t("session.stop_failed") });
+      return;
     }
-  }, [chatStreaming, opencodeClient, props.sessionId, snapshotQuery.refetch]);
+    captureAnalyticsEvent("task_run_stopped", {});
+    await snapshotQuery.refetch();
+  }, [chatStreaming, clearQueuedDrafts, opencodeClient, props.sessionId, props.workspaceRoot, snapshotQuery.refetch]);
 
   const handleDismissError = useCallback(() => {
     setError(null);
@@ -812,18 +843,18 @@ export function SessionSurface(props: SessionSurfaceProps) {
     if (!merged) return;
     const drained = queuedDrafts;
     drainingQueueRef.current = true;
-    setQueuedDrafts([]);
+    clearQueuedDrafts(props.sessionId);
     void (async () => {
       try {
         await sendDraft(merged, merged.attachments);
       } catch {
         // Restore the queue so the user can retry / edit on failure.
-        setQueuedDrafts((current) => [...drained, ...current]);
+        prependQueuedDrafts(props.sessionId, drained);
       } finally {
         drainingQueueRef.current = false;
       }
     })();
-  }, [queuedDrafts, chatStreaming, liveStatus.type, sendDraft]);
+  }, [chatStreaming, clearQueuedDrafts, liveStatus.type, prependQueuedDrafts, props.sessionId, queuedDrafts, sendDraft]);
 
   useEffect(() => {
     props.onDraftChange(buildDraft(draft, attachments));
@@ -835,11 +866,21 @@ export function SessionSurface(props: SessionSurfaceProps) {
       return;
     }
     const oversized = files.filter((file) => file.size > 25 * 1024 * 1024);
-    const accepted = files.filter((file) => file.size <= 25 * 1024 * 1024);
+    const sized = files.filter((file) => file.size <= 25 * 1024 * 1024);
     if (oversized.length) {
       toast.warning(
         oversized.length === 1 ? `${oversized[0]?.name ?? "File"} is too large` : `${oversized.length} files are too large`,
         { description: "Files over 25 MB were skipped." },
+      );
+    }
+    const unreadable = sized.filter((file) => !isModelReadableAttachment(file.type));
+    const accepted = sized.filter((file) => isModelReadableAttachment(file.type));
+    if (unreadable.length) {
+      toast.warning(
+        unreadable.length === 1
+          ? `${unreadable[0]?.name ?? "File"} has a format the model can't read`
+          : `${unreadable.length} files have formats the model can't read`,
+        { description: "Convert to PDF, image, or plain text and attach again." },
       );
     }
     if (!accepted.length) return;
@@ -863,9 +904,39 @@ export function SessionSurface(props: SessionSurfaceProps) {
     setComposerAttachments(props.sessionId, attachments.filter((item) => item.id !== id));
   };
 
-  const handleInsertMention = (kind: "agent" | "file", value: string) => {
+  const handleInsertMention = (kind: ComposerMentionKind, value: string) => {
+    // @agent mentions switch the session agent instead of inserting an agent
+    // part. Agent parts are treated as *subagent* (task tool) calls by the
+    // engine, which silently fails for primary agents and left every reply
+    // coming from the default agent (#2101).
+    if (kind === "agent") {
+      setComposerDraft(props.sessionId, draft.replace(/@([^\s@]*)$/, ""));
+      props.onSelectAgent(value);
+      toast.success(t("composer.agent_selected", { agent: value }));
+      return;
+    }
     setComposerDraft(props.sessionId, draft.replace(/@([^\s@]*)$/, `@${encodeComposerMentionValue(value)} `));
     setComposerMentions(props.sessionId, { ...mentions, [value]: kind });
+    // Pre-flight Computer Use permissions when an app is mentioned so missing
+    // Accessibility / Screen Recording grants surface before send, not as a
+    // mid-task failure. Only ever runs on macOS desktop (apps aren't offered
+    // elsewhere); errors are silently ignored.
+    if (kind === "app") {
+      void (async () => {
+        try {
+          const status = (await desktopBridge.checkComputerUsePermissions()) as { ok?: boolean };
+          if (status.ok === true) return;
+          toast.warning(t("composer.computer_use_permissions_missing", { app: value }), {
+            action: {
+              label: t("composer.computer_use_permissions_setup"),
+              onClick: () => void desktopBridge.openComputerUsePermissionSetup(),
+            },
+          });
+        } catch {
+          // Desktop bridge unavailable — nothing to pre-flight.
+        }
+      })();
+    }
   };
 
   const handlePasteText = (text: string) => {
@@ -1040,12 +1111,24 @@ export function SessionSurface(props: SessionSurfaceProps) {
   }, [typeComposerText]);
 
   const handleRevertToUserMessage = useCallback((messageId: string) => {
-    props.onRevertToMessage?.(messageId);
-  }, [props.onRevertToMessage]);
+    void props.onRevertToMessage?.(messageId, props.sessionId);
+  }, [props.onRevertToMessage, props.sessionId]);
 
   const handleForkAtMessage = useCallback((messageId: string) => {
-    props.onForkAtMessage?.(messageId);
-  }, [props.onForkAtMessage]);
+    // OpenCode's fork copies messages strictly before the given id, so pass
+    // the next real message to make the branch include the clicked message.
+    props.onForkAtMessage?.(resolveForkBoundaryId(renderedMessages, messageId), props.sessionId);
+  }, [props.onForkAtMessage, props.sessionId, renderedMessages]);
+
+  const handleEditUserMessage = useCallback((messageId: string, text: string) => {
+    void (async () => {
+      // Rewind the session to just before this prompt, then restore the
+      // prompt text into the composer so the user can rewrite and resend it.
+      const reverted = await props.onRevertToMessage?.(messageId, props.sessionId);
+      if (reverted === false) return;
+      await typeComposerText(text);
+    })();
+  }, [props.onRevertToMessage, props.sessionId, typeComposerText]);
 
   const sessionScrollTopControlAction = useMemo<OpenworkControlAction>(() => ({
     id: "session.scroll_top",
@@ -1202,6 +1285,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                     setPrompt={handleMessageListSetPrompt}
                     onRevertToUserMessage={handleRevertToUserMessage}
                     onForkAtMessage={handleForkAtMessage}
+                    onEditUserMessage={handleEditUserMessage}
                   >
                     <MessageList
                       messages={renderedMessages}
@@ -1222,7 +1306,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         />
       </div>
 
-      <div ref={composerShellRef} className="shrink-0 border-t border-dls-border/70 px-0 pb-3 pt-3">
+      <div ref={composerShellRef} className="shrink-0 px-0 pb-2 pt-2">
         {(props.providerConnectedCount ?? 0) === 0 ? (
           <button
             type="button"
@@ -1277,6 +1361,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         recentFiles={props.recentFiles}
         searchFiles={props.searchFiles}
         onInsertMention={handleInsertMention}
+        inputHistory={inputHistory}
         onPasteText={handlePasteText}
         onUnsupportedFileLinks={handleUnsupportedFileLinks}
         pastedText={pasteParts}

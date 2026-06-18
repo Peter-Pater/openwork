@@ -2,7 +2,9 @@ import { z } from "zod";
 import type {
   SessionGetResponse,
   SessionListResponse,
-  SessionMessagesResponse,
+  // The v1 `/session/{id}/message` route returns a bare message array; the
+  // `SessionMessagesResponse` name now belongs to the paginated v2 envelope.
+  SessionMessagesResponse2 as SessionMessagesArrayResponse,
   SessionStatusResponse,
   SessionTodoResponse,
 } from "@opencode-ai/sdk/v2/client";
@@ -113,7 +115,7 @@ export function buildSession(value: SessionGetResponse): SessionInfoReadModel {
   return parseOrThrow(sessionInfoSchema, value, "session");
 }
 
-export function buildSessionMessages(value: SessionMessagesResponse): SessionMessageReadModel[] {
+export function buildSessionMessages(value: SessionMessagesArrayResponse): SessionMessageReadModel[] {
   return parseOrThrow(sessionMessagesSchema, value, "session messages");
 }
 
@@ -127,7 +129,7 @@ export function buildSessionStatuses(value: SessionStatusResponse): Record<strin
 
 export function buildSessionSnapshot(input: {
   session: SessionGetResponse;
-  messages: SessionMessagesResponse;
+  messages: SessionMessagesArrayResponse;
   todos: SessionTodoResponse;
   statuses: SessionStatusResponse;
 }): SessionSnapshotReadModel {

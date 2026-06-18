@@ -1,7 +1,9 @@
 import type { UIMessage } from "ai";
-import type { FilePart, Part, PermissionRequest, QuestionRequest, SessionStatus, Todo } from "@opencode-ai/sdk/v2/client";
+import type { FilePart, Part, PermissionRequest, QuestionRequest, Session, SessionStatus, Todo } from "@opencode-ai/sdk/v2/client";
 
 import { getReactQueryClient } from "../../../infra/query-client";
+import { captureAnalyticsEvent, takeTaskRunStart } from "@/app/lib/analytics";
+import { trackTaskCompleted, trackTaskFailed } from "@/app/lib/den-telemetry";
 import { createClient } from "@/app/lib/opencode";
 import { normalizeEvent } from "@/app/utils";
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX, type OpencodeEvent, type PendingPermission, type PendingQuestion } from "@/app/types";
@@ -12,7 +14,7 @@ import {
   STRUCTURED_OUTPUT_TOOL,
 } from "./parse-tool-parts";
 import type { OpenworkSessionSnapshot } from "@/app/lib/openwork-server";
-import { reconcileTranscriptMessages } from "./transcript-reconcile";
+import { applyRevertCursor, reconcileTranscriptMessages } from "./transcript-reconcile";
 import {
   useSessionActivityStore,
 } from "../status/session-activity-store";
@@ -57,6 +59,8 @@ const syncs = new Map<string, SyncEntry>();
 const retainedSessionTtlMs = 10 * 60_000;
 const idleRetainedSessionTtlMs = 10_000;
 
+export const snapshotKey = (workspaceId: string, sessionId: string) =>
+  ["react-session-snapshot", workspaceId, sessionId] as const;
 export const transcriptKey = (workspaceId: string, sessionId: string) =>
   ["react-session-transcript", workspaceId, sessionId] as const;
 export const statusKey = (workspaceId: string, sessionId: string) =>
@@ -548,6 +552,18 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const update = getSessionUpdatedInfo(event);
     if (!update) return;
     if (!isTrackedSession(entry, update.sessionId)) return;
+    // Keep the cached snapshot's revert cursor in sync with the server. The
+    // renderer derives the visible transcript from this cursor, so a revert
+    // (or its cleanup on the next prompt) must reach the snapshot cache or
+    // the transcript stays frozen on stale history.
+    queryClient.setQueryData<OpenworkSessionSnapshot>(
+      snapshotKey(workspaceId, update.sessionId),
+      (current) => {
+        if (!current) return current;
+        const revert = (update.info as { revert?: OpenworkSessionSnapshot["session"]["revert"] }).revert;
+        return { ...current, session: { ...current.session, revert } };
+      },
+    );
     for (const listener of entry.sessionUpdatedListeners) listener(update);
     return;
   }
@@ -563,6 +579,13 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     const sessionId = sessionIdFromProperties(event.properties);
     if (sessionId) {
       const errorText = describeOpencodeSessionError(sessionErrorFromProperties(event.properties));
+      const runStartedAt = takeTaskRunStart(sessionId);
+      if (runStartedAt !== null) {
+        captureAnalyticsEvent("task_run_errored", {
+          duration_ms: Date.now() - runStartedAt,
+        });
+        trackTaskFailed(sessionId, Date.now() - runStartedAt);
+      }
       useSessionActivityStore.getState().setError(workspaceId, sessionId, errorText);
       if (isTrackedSession(entry, sessionId)) {
         queryClient.setQueryData<UIMessage[]>(transcriptKey(workspaceId, sessionId), (current = []) => {
@@ -692,6 +715,26 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     return;
   }
 
+  if (event.type === "message.removed") {
+    // Revert cleanup (and explicit message deletion) removes messages
+    // server-side; drop them from both the live transcript cache and the
+    // cached snapshot so they can't be resurrected by later merges.
+    const props = (event.properties ?? {}) as { sessionID?: string; messageID?: string };
+    if (!props.sessionID || !props.messageID) return;
+    if (!isTrackedSession(entry, props.sessionID)) return;
+    queryClient.setQueryData<UIMessage[]>(transcriptKey(workspaceId, props.sessionID), (current = []) =>
+      current.filter((message) => message.id !== props.messageID),
+    );
+    queryClient.setQueryData<OpenworkSessionSnapshot>(
+      snapshotKey(workspaceId, props.sessionID),
+      (current) => {
+        if (!current) return current;
+        return { ...current, messages: current.messages.filter((message) => message.info.id !== props.messageID) };
+      },
+    );
+    return;
+  }
+
   if (event.type === "message.part.updated") {
     const props = (event.properties ?? {}) as { part?: Part };
     const part = props.part;
@@ -783,6 +826,15 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
   if (event.type === "session.idle") {
     const props = (event.properties ?? {}) as { sessionID?: string };
     if (!props.sessionID) return;
+    // Only emits for runs this client instrumented (markTaskRunStart in the
+    // send path); also dedupes idle events from multiple workspace syncs.
+    const runStartedAt = takeTaskRunStart(props.sessionID);
+    if (runStartedAt !== null) {
+      captureAnalyticsEvent("task_run_completed", {
+        duration_ms: Date.now() - runStartedAt,
+      });
+      trackTaskCompleted(props.sessionID, Date.now() - runStartedAt);
+    }
     useSessionActivityStore.getState().setRunStatus(workspaceId, props.sessionID, idleStatus);
     const tracked = isTrackedSession(entry, props.sessionID);
     if (tracked) queryClient.setQueryData(statusKey(workspaceId, props.sessionID), idleStatus);
@@ -1015,14 +1067,44 @@ export function seedSessionState(workspaceId: string, snapshot: OpenworkSessionS
     assistantOutputAfterLatestUser(incoming),
   );
 
-  queryClient.setQueryData(key, reconcileTranscriptMessages({
-    currentMessages: existing ?? [],
-    snapshotMessages: incoming,
-    reason: "snapshot",
-  }));
+  // The snapshot's revert cursor is authoritative: messages at/after it are
+  // reverted server-side, so the cache must not keep them alive (a later
+  // merge would resurrect them once the server deletes them on next prompt).
+  queryClient.setQueryData(key, applyRevertCursor(
+    reconcileTranscriptMessages({
+      currentMessages: existing ?? [],
+      snapshotMessages: incoming,
+      reason: "snapshot",
+    }),
+    snapshot.session.revert?.messageID ?? null,
+  ));
 
   queryClient.setQueryData(statusKey(workspaceId, snapshot.session.id), snapshot.status);
   queryClient.setQueryData(todoKey(workspaceId, snapshot.session.id), snapshot.todos);
+}
+
+/**
+ * Apply a server-confirmed revert to the local session caches.
+ *
+ * `session.revert` only reaches the renderer through the snapshot cache, so
+ * after a successful `session.revert` call this stamps the returned revert
+ * cursor into the cached snapshot, truncates the live transcript cache, and
+ * refetches the snapshot to pick up the server's post-revert truth. Without
+ * this the UI keeps rendering the old transcript until a full reload.
+ */
+export function applySessionRevert(workspaceId: string, session: Session) {
+  const queryClient = getReactQueryClient();
+  const revertMessageId = session.revert?.messageID ?? null;
+
+  queryClient.setQueryData<OpenworkSessionSnapshot>(
+    snapshotKey(workspaceId, session.id),
+    (current) => (current ? { ...current, session: { ...current.session, revert: session.revert } } : current),
+  );
+  queryClient.setQueryData<UIMessage[]>(
+    transcriptKey(workspaceId, session.id),
+    (current = []) => applyRevertCursor(current, revertMessageId),
+  );
+  void queryClient.invalidateQueries({ queryKey: snapshotKey(workspaceId, session.id) });
 }
 
 export function trackWorkspaceSessionSync(input: SyncOptions, sessionId: string | null | undefined) {

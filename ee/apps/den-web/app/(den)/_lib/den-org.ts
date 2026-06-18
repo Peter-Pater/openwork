@@ -113,6 +113,15 @@ export type DenOrgScimConnection = {
   updatedAt: string | null;
 };
 
+export type DenOrgScimHealth = {
+  unresolvedFailureCount: number;
+  lastFailureAt: string | null;
+  lastFailureAction: string | null;
+  lastFailureMessage: string | null;
+  nextRetryAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+};
+
 export type DenOrgSsoConnection = {
   id: string;
   providerId: string;
@@ -177,6 +186,20 @@ export type DenOrgContext = {
   roles: DenOrgRole[];
   teams: DenOrgTeam[];
   currentMemberTeams: DenCurrentMemberTeam[];
+  entitlements: DenOrgEntitlements;
+  authMethods: DenOrgAuthMethods;
+};
+
+export type DenOrgAuthMethods = {
+  sso: boolean;
+  scim: boolean;
+};
+
+export type DenOrgEntitlements = {
+  sso: boolean;
+  desktopPolicies: boolean;
+  orgControls: boolean;
+  analytics: boolean;
 };
 
 export type DenOrganizationMetadata = {
@@ -190,6 +213,7 @@ export const DEN_ROLE_PERMISSION_OPTIONS = {
   invitation: ["create", "cancel"],
   team: ["create", "update", "delete"],
   ac: ["create", "read", "update", "delete"],
+  security_configuration: ["manage"],
 } as const;
 
 export const PENDING_ORG_INVITATION_STORAGE_KEY = "openwork:web:pending-org-invitation";
@@ -276,22 +300,32 @@ export function splitRoleString(value: string): string[] {
     .filter(Boolean);
 }
 
-export function getOrgAccessFlags(roleValue: string, isOwner: boolean) {
-  const roles = new Set(splitRoleString(roleValue));
-  const isAdmin = isOwner || roles.has("admin");
+function roleHasSecurityConfigurationPermission(roleValue: string, roles: readonly DenOrgRole[]) {
+  const roleNames = new Set(splitRoleString(roleValue));
+  return roles.some((role) => (
+    roleNames.has(role.role)
+    && (role.permission.security_configuration?.includes("manage") ?? false)
+  ));
+}
+
+export function getOrgAccessFlags(roleValue: string, isOwner: boolean, roleDefinitions: readonly DenOrgRole[] = []) {
+  const roleNames = new Set(splitRoleString(roleValue));
+  const isAdmin = isOwner || roleNames.has("admin");
+  const canManageSecurityConfiguration = isOwner || roleHasSecurityConfigurationPermission(roleValue, roleDefinitions);
 
   return {
     isOwner,
     isAdmin,
+    canManageSecurityConfiguration,
     canInviteMembers: isAdmin,
     canCancelInvitations: isAdmin,
     canManageMembers: isOwner,
     canRemoveMembers: isAdmin,
     canManageRoles: isOwner,
     canManageTeams: isAdmin,
-    canManageApiKeys: isAdmin,
-    canManageScim: isAdmin,
-    canManageSso: isAdmin,
+    canManageApiKeys: canManageSecurityConfiguration,
+    canManageScim: canManageSecurityConfiguration,
+    canManageSso: canManageSecurityConfiguration,
   };
 }
 
@@ -313,6 +347,10 @@ export function getMarketplaceOnboardingRoute(_orgSlug?: string | null): string 
 
 export function getJoinOrgRoute(invitationId: string): string {
   return `/join-org?invite=${encodeURIComponent(invitationId)}`;
+}
+
+export function getAnalyticsRoute(orgSlug?: string | null): string {
+  return `${getOrgDashboardRoute(orgSlug)}/analytics`;
 }
 
 export function getManageMembersRoute(orgSlug?: string | null): string {
@@ -383,40 +421,16 @@ export function getSsoRoute(orgSlug?: string | null): string {
   return `${getOrgDashboardRoute(orgSlug)}/sso`;
 }
 
-export function getSkillHubsRoute(orgSlug?: string | null): string {
-  return `${getOrgDashboardRoute(orgSlug)}/skill-hubs`;
-}
-
-export function getSkillHubRoute(orgSlug: string | null | undefined, skillHubId: string): string {
-  return `${getSkillHubsRoute(orgSlug)}/${encodeURIComponent(skillHubId)}`;
-}
-
-export function getEditSkillHubRoute(orgSlug: string | null | undefined, skillHubId: string): string {
-  return `${getSkillHubRoute(orgSlug, skillHubId)}/edit`;
-}
-
-export function getNewSkillHubRoute(orgSlug?: string | null): string {
-  return `${getSkillHubsRoute(orgSlug)}/new`;
-}
-
-export function getSkillDetailRoute(orgSlug: string | null | undefined, skillId: string): string {
-  return `${getSkillHubsRoute(orgSlug)}/skills/${encodeURIComponent(skillId)}`;
-}
-
-export function getEditSkillRoute(orgSlug: string | null | undefined, skillId: string): string {
-  return `${getSkillDetailRoute(orgSlug, skillId)}/edit`;
-}
-
-export function getNewSkillRoute(orgSlug?: string | null): string {
-  return `${getSkillHubsRoute(orgSlug)}/skills/new`;
-}
-
 export function getPluginsRoute(orgSlug?: string | null): string {
   return `${getOrgDashboardRoute(orgSlug)}/plugins`;
 }
 
 export function getPluginRoute(orgSlug: string | null | undefined, pluginId: string): string {
   return `${getPluginsRoute(orgSlug)}/${encodeURIComponent(pluginId)}`;
+}
+
+export function getNewPluginRoute(orgSlug?: string | null): string {
+  return `${getPluginsRoute(orgSlug)}/new`;
 }
 
 export function getMarketplacesRoute(orgSlug?: string | null): string {
@@ -683,6 +697,34 @@ export function parseOrgContextPayload(payload: unknown): DenOrgContext | null {
     roles,
     teams,
     currentMemberTeams,
+    entitlements: parseOrgEntitlements(payload.entitlements),
+    authMethods: parseOrgAuthMethods(payload.authMethods),
+  };
+}
+
+function parseOrgAuthMethods(value: unknown): DenOrgAuthMethods {
+  if (!isRecord(value)) {
+    return { sso: false, scim: false };
+  }
+
+  return {
+    sso: value.sso === true,
+    scim: value.scim === true,
+  };
+}
+
+function parseOrgEntitlements(value: unknown): DenOrgEntitlements {
+  // Older servers do not return entitlements; treat everything as available
+  // so gating only applies when the API explicitly reports it.
+  if (!isRecord(value)) {
+    return { sso: true, desktopPolicies: true, orgControls: true, analytics: true };
+  }
+
+  return {
+    sso: value.sso !== false,
+    desktopPolicies: value.desktopPolicies !== false,
+    orgControls: value.orgControls !== false,
+    analytics: value.analytics !== false,
   };
 }
 
@@ -789,10 +831,23 @@ export function parseOrgApiKeysPayload(payload: unknown): DenOrgApiKey[] {
 export function parseOrgScimPayload(payload: unknown): {
   baseUrl: string | null;
   connection: DenOrgScimConnection | null;
+  health: DenOrgScimHealth;
   scimToken: string | null;
 } {
   if (!isRecord(payload)) {
-    return { baseUrl: null, connection: null, scimToken: null };
+    return {
+      baseUrl: null,
+      connection: null,
+      health: {
+        unresolvedFailureCount: 0,
+        lastFailureAt: null,
+        lastFailureAction: null,
+        lastFailureMessage: null,
+        nextRetryAt: null,
+        lastSuccessfulSyncAt: null,
+      },
+      scimToken: null,
+    };
   }
 
   const rawConnection = isRecord(payload.connection) ? payload.connection : null;
@@ -816,9 +871,22 @@ export function parseOrgScimPayload(payload: unknown): {
       })()
     : null;
 
+  const rawHealth = isRecord(payload.health) ? payload.health : null;
+  const health = {
+    unresolvedFailureCount: typeof rawHealth?.unresolvedFailureCount === "number"
+      ? rawHealth.unresolvedFailureCount
+      : 0,
+    lastFailureAt: asIsoString(rawHealth?.lastFailureAt),
+    lastFailureAction: asString(rawHealth?.lastFailureAction),
+    lastFailureMessage: asString(rawHealth?.lastFailureMessage),
+    nextRetryAt: asIsoString(rawHealth?.nextRetryAt),
+    lastSuccessfulSyncAt: asIsoString(rawHealth?.lastSuccessfulSyncAt),
+  } satisfies DenOrgScimHealth;
+
   return {
     baseUrl: asString(payload.baseUrl),
     connection,
+    health,
     scimToken: asString(payload.scimToken),
   };
 }

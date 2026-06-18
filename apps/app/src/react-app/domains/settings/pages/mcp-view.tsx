@@ -8,6 +8,7 @@ import {
   Cloud,
   Code2,
   CreditCard,
+  Download,
   ExternalLink,
   FolderOpen,
   Globe,
@@ -44,6 +45,8 @@ import { t } from "../../../../i18n";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
 import { AddMcpModal } from "../../connections/modals/add-mcp-modal";
+import { ClaudePluginImportModal } from "../../connections/modals/claude-plugin-import-modal";
+import type { OpenworkClaudePluginPreview } from "../../../../app/lib/openwork-server";
 import {
   isOpenWorkExtensionEnabled,
   isOpenWorkExtensionHidden,
@@ -112,6 +115,10 @@ export type McpViewProps = {
   enablementContext?: import("../../../../app/enablement").EnablementContext;
   /** Organization policy restriction for OpenWork-provided built-in extensions. */
   builtInExtensionsDisabled?: boolean;
+  /** Preview a Claude Code plugin bundle from a GitHub URL ("Will install" disclosure). */
+  previewClaudePlugin?: (url: string) => Promise<OpenworkClaudePluginPreview>;
+  /** Install a Claude Code plugin bundle from a GitHub URL. */
+  installClaudePlugin?: (url: string) => Promise<{ ok: boolean; message: string }>;
 };
 
 const builtInExtensionDisabledReason = "Disabled by organization";
@@ -235,6 +242,7 @@ export function McpView(props: McpViewProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ExtensionFilter>("all");
   const [showHidden, setShowHidden] = useState(false);
+  const [claudeImportOpen, setClaudeImportOpen] = useState(false);
   const [, setExtensionStateVersion] = useState(0);
 
   const [localState, dispatchLocal] = useReducer(
@@ -498,7 +506,14 @@ export function McpView(props: McpViewProps) {
         </div>
       ) : null}
 
-      <McpCustomAppCard onOpen={() => setAddMcpModalOpen(true)} />
+      <McpCustomAppCard
+        onOpen={() => setAddMcpModalOpen(true)}
+        onOpenGithubImport={
+          props.previewClaudePlugin && props.installClaudePlugin
+            ? () => setClaudeImportOpen(true)
+            : undefined
+        }
+      />
 
       {/* Search + filter */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -680,6 +695,15 @@ export function McpView(props: McpViewProps) {
         isRemoteWorkspace={props.isRemoteWorkspace}
       />
 
+      {props.previewClaudePlugin && props.installClaudePlugin ? (
+        <ClaudePluginImportModal
+          open={claudeImportOpen}
+          onClose={() => setClaudeImportOpen(false)}
+          onPreview={props.previewClaudePlugin}
+          onInstall={props.installClaudePlugin}
+        />
+      ) : null}
+
       {detailEntry ? (() => {
         const extensionConfigSlot = props.configSlotForEntry?.(detailEntry) ?? null;
         const hasConfigSlot = extensionConfigSlot !== null;
@@ -807,7 +831,7 @@ function McpViewHeader(props: { connectedCount: number }) {
   );
 }
 
-function McpCustomAppCard(props: { onOpen: () => void }) {
+function McpCustomAppCard(props: { onOpen: () => void; onOpenGithubImport?: () => void }) {
   return (
     <div className="rounded-2xl border border-blue-6/30 bg-[linear-gradient(180deg,rgba(59,130,246,0.08),rgba(59,130,246,0.03))] p-5 sm:px-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -815,10 +839,18 @@ function McpCustomAppCard(props: { onOpen: () => void }) {
           <div className="text-base font-semibold text-dls-text">{t("mcp.add_modal_title")}</div>
           <div className="text-sm text-dls-secondary">{t("mcp.custom_app_cta_hint")}</div>
         </div>
-        <Button onClick={props.onOpen}>
-          <Plus size={14} />
-          {t("mcp.add_modal_title")}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {props.onOpenGithubImport ? (
+            <Button variant="outline" onClick={props.onOpenGithubImport}>
+              <Download size={14} />
+              From GitHub
+            </Button>
+          ) : null}
+          <Button onClick={props.onOpen}>
+            <Plus size={14} />
+            {t("mcp.add_modal_title")}
+          </Button>
+        </div>
       </div>
     </div>
   );

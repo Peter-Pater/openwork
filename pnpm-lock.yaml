@@ -67,8 +67,8 @@ importers:
         specifier: ^0.35.0
         version: 0.35.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(yjs@13.6.30)
       '@opencode-ai/sdk':
-        specifier: ^1.15.12
-        version: 1.15.12
+        specifier: ^1.17.3
+        version: 1.17.3
       '@openwork/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -93,6 +93,12 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.23
         version: 3.13.23(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@xterm/addon-fit':
+        specifier: ^0.11.0
+        version: 0.11.0
+      '@xterm/xterm':
+        specifier: ^6.0.0
+        version: 6.0.0
       ai:
         specifier: ^6.0.146
         version: 6.0.146(zod@4.3.6)
@@ -215,8 +221,8 @@ importers:
   apps/desktop:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: ^1.15.12
-        version: 1.15.12
+        specifier: ^1.17.3
+        version: 1.17.3
       better-sqlite3:
         specifier: ^11.10.0
         version: 11.10.0
@@ -232,6 +238,9 @@ importers:
       minimatch:
         specifier: ^10.0.1
         version: 10.1.1
+      node-pty:
+        specifier: npm:@lydell/node-pty@1.2.0-beta.12
+        version: '@lydell/node-pty@1.2.0-beta.12'
       yaml:
         specifier: ^2.6.1
         version: 2.8.2
@@ -239,6 +248,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@openwork/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       electron:
         specifier: ^35.0.0
         version: 35.7.5
@@ -252,8 +264,8 @@ importers:
   apps/opencode-router:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: ^1.15.12
-        version: 1.15.12
+        specifier: ^1.17.3
+        version: 1.17.3
       '@slack/socket-mode':
         specifier: ^2.0.5
         version: 2.0.5
@@ -286,8 +298,8 @@ importers:
   apps/orchestrator:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: ^1.15.12
-        version: 1.15.12
+        specifier: ^1.17.3
+        version: 1.17.3
       '@opentui/core':
         specifier: 0.1.77
         version: 0.1.77(stage-js@1.0.0-alpha.17)(typescript@5.9.3)(web-tree-sitter@0.25.10)
@@ -295,10 +307,10 @@ importers:
         specifier: 0.1.77
         version: 0.1.77(solid-js@1.9.9)(stage-js@1.0.0-alpha.17)(typescript@5.9.3)(web-tree-sitter@0.25.10)
       opencode-router:
-        specifier: 0.15.1
+        specifier: 0.17.1
         version: link:../opencode-router
       openwork-server:
-        specifier: 0.15.1
+        specifier: 0.17.1
         version: link:../server
       solid-js:
         specifier: 1.9.9
@@ -332,8 +344,8 @@ importers:
   apps/server:
     dependencies:
       '@opencode-ai/sdk':
-        specifier: ^1.15.12
-        version: 1.15.12
+        specifier: ^1.17.3
+        version: 1.17.3
       better-sqlite3:
         specifier: ^11.10.0
         version: 11.10.0
@@ -353,6 +365,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@openwork/types':
+        specifier: workspace:*
+        version: link:../../packages/types
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -459,12 +474,18 @@ importers:
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      fast-xml-parser:
+        specifier: 5.8.0
+        version: 5.8.0
       hono:
         specifier: ^4.7.2
         version: 4.12.8
       hono-openapi:
         specifier: ^1.3.0
         version: 1.3.0(@hono/standard-validator@0.2.2(@standard-schema/spec@1.1.0)(hono@4.12.8))(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.2(zod@4.3.6))(zod@4.3.6))(@standard-community/standard-openapi@0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.2(zod@4.3.6))(zod@4.3.6))(@standard-schema/spec@1.1.0)(openapi-types@12.1.3)(zod@4.3.6))(@types/json-schema@7.0.15)(hono@4.12.8)(openapi-types@12.1.3)
+      jsonc-parser:
+        specifier: ^3.2.1
+        version: 3.3.1
       nanoid:
         specifier: ^5.1.11
         version: 5.1.11
@@ -663,6 +684,18 @@ importers:
         specifier: 5.4.5
         version: 5.4.5
 
+  ee/packages/den-admin-mcp:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
+      mysql2:
+        specifier: ^3.11.3
+        version: 3.17.4
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   ee/packages/den-db:
     dependencies:
       '@openwork-ee/utils':
@@ -800,9 +833,6 @@ importers:
       react:
         specifier: ^18 || ^19
         version: 19.2.4
-      solid-js:
-        specifier: ^1.9.0
-        version: 1.9.9
     devDependencies:
       '@types/react':
         specifier: ^19.2.14
@@ -1387,6 +1417,7 @@ packages:
 
   '@daytonaio/sdk@0.173.0':
     resolution: {integrity: sha512-/eaP3YMhyhkZrmjEYT1pgTWyN0soBqi98+xSEa7lFhI0jc8E83eGv8yOS7DrzDIkc7cZqTmWKHOqn4dZmcfw1A==}
+    deprecated: 'Moved to @daytona/sdk, same API, no breaking changes. Please update: npm uninstall @daytonaio/sdk && npm i @daytona/sdk'
 
   '@develar/schema-utils@2.6.5':
     resolution: {integrity: sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig==}
@@ -2554,6 +2585,39 @@ packages:
   '@lezer/markdown@1.6.3':
     resolution: {integrity: sha512-jpGm5Ps+XErS+xA4urw7ogEGkeZOahVQF21Z6oECF0sj+2liwZopd2+I8uH5I/vZsRuuze3OxBREIANLf6KKUw==}
 
+  '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
+    resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@lydell/node-pty-darwin-x64@1.2.0-beta.12':
+    resolution: {integrity: sha512-4LrS5pCJwqHKDVf1zS2gyNV0m4hKAXch+XZNhbZ6LY8uwVL8BhchzQBO40Os5anuRxRCWzHpw4Sp64Ie8q7E4Q==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@lydell/node-pty-linux-arm64@1.2.0-beta.12':
+    resolution: {integrity: sha512-Sx+A71x5BDGHt9ansfrtGxwq2VFVDWvJUAdlUL0Hv0qeiJUfts+hgopx+CgT4PSwahKjdEgtu0+FAfY9rICKRw==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@lydell/node-pty-linux-x64@1.2.0-beta.12':
+    resolution: {integrity: sha512-bJzs94njofYhGg/UDqW1nj0dtvvu+2OvxMY+RlLS1T17VgcktKoIR6PuenTwE5HJ/D6StCPADmXcT0nNsCKmIQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@lydell/node-pty-win32-arm64@1.2.0-beta.12':
+    resolution: {integrity: sha512-p7POgjVEiFaBC3/y+AKuV1FzePCsJ6HmZDv2XK+jBZSfwP8+uBAw181ZiKYN1YuRa/XpmBGaWezcI8hZkbW++g==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@lydell/node-pty-win32-x64@1.2.0-beta.12':
+    resolution: {integrity: sha512-IDFa00g7qUDGUYgByrUBJtC+mOjYVt/8KYyWivCg5JjGOHbBUACUQZLl0jTWmnr+tld/UyTpX90a2PY6oTVtRw==}
+    cpu: [x64]
+    os: [win32]
+
+  '@lydell/node-pty@1.2.0-beta.12':
+    resolution: {integrity: sha512-qIK890UwPupoj07osVvgOIa++1mxeHbcGry4PKRHhNVNs81V2SCG34eJr46GybiOmBtc8Sj5PB1/GGM5PL549g==}
+
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg==}
     engines: {node: '>= 12.13.0'}
@@ -2809,8 +2873,8 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
-  '@opencode-ai/sdk@1.15.12':
-    resolution: {integrity: sha512-lOaBNX93dkakZe6C42ttX1bkSx3K2c6+Yv+w8Qv02v5rPlu1vCXbmdfYDh9/bw+oq+NKPSaBm9d6kPA19hA5Lg==}
+  '@opencode-ai/sdk@1.17.3':
+    resolution: {integrity: sha512-oXrEjOuP3+J9pPNw3cmOnRma/xiVQ4WIIvGd6YkhPQgqqi2PnD/b1qfNY0AMead3QfNhKwKdDM4QFJdN2LpByg==}
 
   '@opentelemetry/api-logs@0.207.0':
     resolution: {integrity: sha512-lAb0jQRVyleQQGiuuvCOTDVspc14nx6XJjP4FspJ1sNARo3Regq4ZZbrc3rN4b1TYSuUCvgH+UXUPug4SLOqEQ==}
@@ -4379,6 +4443,12 @@ packages:
   '@xmldom/xmldom@0.8.13':
     resolution: {integrity: sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw==}
     engines: {node: '>=10.0.0'}
+
+  '@xterm/addon-fit@0.11.0':
+    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
+
+  '@xterm/xterm@6.0.0':
+    resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
 
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
@@ -11257,6 +11327,33 @@ snapshots:
       '@lezer/common': 1.5.1
       '@lezer/highlight': 1.2.3
 
+  '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty-darwin-x64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty-linux-arm64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty-linux-x64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty-win32-arm64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty-win32-x64@1.2.0-beta.12':
+    optional: true
+
+  '@lydell/node-pty@1.2.0-beta.12':
+    optionalDependencies:
+      '@lydell/node-pty-darwin-arm64': 1.2.0-beta.12
+      '@lydell/node-pty-darwin-x64': 1.2.0-beta.12
+      '@lydell/node-pty-linux-arm64': 1.2.0-beta.12
+      '@lydell/node-pty-linux-x64': 1.2.0-beta.12
+      '@lydell/node-pty-win32-arm64': 1.2.0-beta.12
+      '@lydell/node-pty-win32-x64': 1.2.0-beta.12
+
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
       cross-spawn: 7.0.6
@@ -11457,7 +11554,7 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
-  '@opencode-ai/sdk@1.15.12':
+  '@opencode-ai/sdk@1.17.3':
     dependencies:
       cross-spawn: 7.0.6
 
@@ -13075,6 +13172,10 @@ snapshots:
   '@xmldom/is-dom-node@1.0.1': {}
 
   '@xmldom/xmldom@0.8.13': {}
+
+  '@xterm/addon-fit@0.11.0': {}
+
+  '@xterm/xterm@6.0.0': {}
 
   abbrev@1.1.1: {}
 

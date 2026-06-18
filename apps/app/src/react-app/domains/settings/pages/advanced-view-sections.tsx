@@ -253,7 +253,7 @@ export function AdvancedRuntimeMigrationSection(props: AdvancedRuntimeMigrationS
             <div className="space-y-2 rounded-xl border border-blue-6/50 bg-blue-2/40 p-3">
               <div className="font-medium text-gray-12">Effective injected OpenCode config</div>
               <div className="text-[11px] text-gray-9">
-                This is the OpenWork-built config object injected through `OPENCODE_CONFIG_CONTENT`. It includes OpenWork defaults plus runtime DB values.
+                This is the OpenWork-built config object injected through the server-managed `OPENCODE_CONFIG` file. It includes OpenWork defaults plus runtime DB values and is rewritten on every runtime config change.
               </div>
               <RuntimeConfigSummary config={props.configStatus.effectiveRuntime ?? props.configStatus.runtime} />
               <details className="rounded-lg bg-gray-3 p-2">

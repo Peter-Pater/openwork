@@ -61,8 +61,11 @@ opencode.jsonc
 .claude/*
 .security
 transcript-analysi
+transcript-analysis
 
 attach_server.md
 my_workspace/
 openwork_architecture_and_setup.md
 querying_backend.md
+# Eval runner output
+evals/results/

@@ -368,3 +368,9 @@ export type QuestionToolPart = BuiltInDynamicToolPart<"question", QuestionInput>
 export function isQuestionToolPart(part: ToolUIPart | DynamicToolUIPart): part is QuestionToolPart {
   return part.type === "dynamic-tool" && part.toolName === "question";
 }
+
+export type TaskToolPart = BuiltInDynamicToolPart<"task", TaskInput>;
+
+export function isTaskToolPart(part: ToolUIPart | DynamicToolUIPart): part is TaskToolPart {
+  return part.type === "dynamic-tool" && part.toolName === "task";
+}

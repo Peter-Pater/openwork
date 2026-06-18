@@ -18,7 +18,6 @@ import {
   shellInSession,
   unrevertSession,
 } from "../../../../app/lib/opencode-session";
-import { trackSessionActive } from "../../../../app/lib/den-telemetry";
 import { finishPerf, perfNow, recordPerfLog } from "../../../../app/lib/perf-log";
 import { toSessionTransportDirectory } from "../../../../app/lib/session-scope";
 import { workspaceSessionRoute } from "../../../shell/workspace-routes";
@@ -33,6 +32,7 @@ import type {
 import { addOpencodeCacheHint, safeStringify } from "../../../../app/utils";
 import { clearSessionDraft, saveSessionDraft } from "./draft-store";
 import { firstLineLocalFileParts } from "./prompt-file-parts";
+import { appMentionInstruction } from "../surface/composer/app-mentions";
 
 type SessionModelConfig = {
   applyPendingSessionChoice: (sessionId: string) => void;
@@ -65,9 +65,10 @@ const fileToDataUrl = (file: File, mimeType: string) =>
 function attachmentMime(attachment: ComposerAttachment) {
   if (attachment.kind === "image") return attachment.mimeType;
   if (attachment.mimeType === "application/pdf") return attachment.mimeType;
-  if (attachment.mimeType === "application/json") return "text/plain";
-  if (attachment.mimeType.startsWith("text/")) return "text/plain";
-  return attachment.mimeType;
+  // Everything else is sent as text. Unsupported binary mimes (e.g. Keynote)
+  // poison the server-side session history: every later prompt replays the
+  // provider's UnsupportedFunctionalityError and the session cannot recover.
+  return "text/plain";
 }
 
 export function createSessionActionsStore(options: {
@@ -188,6 +189,10 @@ export function createSessionActionsStore(options: {
     for (const part of draft.parts) {
       if (part.type === "agent") {
         parts.push({ type: "agent", name: part.name } as AgentPartInput);
+        continue;
+      }
+      if (part.type === "app") {
+        parts.push({ type: "text", text: appMentionInstruction(part.name) } as TextPartInput);
         continue;
       }
       if (part.type === "file") {
@@ -407,7 +412,6 @@ export function createSessionActionsStore(options: {
         mark("session:create:start");
         rawResult = await c.session.create({ directory });
         mark("session:create:ok");
-        trackSessionActive();
       } catch (createErr) {
         mark("session:create:error", {
           error: createErr instanceof Error ? createErr.message : safeStringify(createErr),

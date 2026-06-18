@@ -7,14 +7,10 @@ import {
   Copy,
   FileIcon,
   LoaderCircle,
+  Pencil,
   Split,
   Undo2,
 } from "lucide-react"
-import {
-  AnimatePresence,
-  LayoutGroup,
-  motion,
-} from "motion/react"
 import { PaperGrainGradient } from "@openwork/ui/react"
 import {
   DynamicToolUIPart,
@@ -48,6 +44,12 @@ import {
   DescriptiveButtonTitle,
 } from "@/components/descriptive-button"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { Image } from "@/components/ui/image"
 import {
   Message,
@@ -55,11 +57,6 @@ import {
   MessageActions,
   MessageContent,
 } from "@/components/ui/message"
-import {
-  Steps,
-  StepsContent,
-  StepsTrigger,
-} from "@/components/ui/steps"
 import { Tool } from "@/components/ui/tool"
 import {
   isApplyPatchToolPart,
@@ -77,14 +74,63 @@ import {
   isWriteToolPart,
 } from "@/lib/build-in-tools"
 import type { ThreadStatus } from "@/lib/messages"
+import {
+  collectToolParts,
+  getActiveToolLabel,
+} from "@/lib/tool-activity"
 import { cn } from "@/lib/utils"
-import { groupMessages, isMessageGroup, getLastTextPart, getAssistantRenderGroups, getFileTitle, getMediaBadge, type UIMessageWithIndex, getMessagesText } from "./utils"
+import { groupMessages, isMessageGroup, getLastTextPart, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCreated, formatMessageTimestamp, type UIMessageWithIndex, getMessagesText } from "./utils"
+
+function MessageTimestamp({ message, className }: { message: UIMessage; className?: string }) {
+  const created = getMessageCreated(message)
+  if (created === null) return null
+
+  return (
+    <span
+      className={cn(
+        "select-none whitespace-nowrap text-[11px] tabular-nums text-muted-foreground/70",
+        className
+      )}
+      title={new Date(created).toLocaleString()}
+    >
+      {formatMessageTimestamp(created)}
+    </span>
+  )
+}
 
 interface ToolMessageProps {
   part: ToolUIPart | DynamicToolUIPart
 }
 
-const ToolMessage = ({ part }: ToolMessageProps) => {
+/**
+ * Error boundary around tool-part rendering. Tool inputs from streamed or
+ * interrupted runs can violate their type contracts (partial/undefined
+ * input); without this boundary a single bad part unmounts the entire app
+ * (white screen). Seen in production on v0.15.3 via a todowrite part with
+ * missing input.todos.
+ */
+class ToolMessage extends React.Component<ToolMessageProps, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("[tool-part] render failed", error)
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="text-xs text-muted-foreground">Tool step unavailable</div>
+      )
+    }
+    return <ToolMessageInner part={this.props.part} />
+  }
+}
+
+const ToolMessageInner = ({ part }: ToolMessageProps) => {
   if (isBashToolPart(part)) {
     return <BashTool part={part} />
   }
@@ -170,7 +216,6 @@ function FileMessage({ part }: FileMessageProps) {
         alt={title}
         loading="lazy"
         decoding="async"
-        className="size-full object-cover"
       />
     )
   }
@@ -347,7 +392,8 @@ function renderUserTextWithSkillChips(text: string) {
 
 const UserMessage = React.memo(
   ({ message, isStreaming }: UserMessageProps) => {
-    const { onRevertToUserMessage, onForkAtMessage } = useMessageList()
+    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage } = useMessageList()
+    const messageText = React.useMemo(() => getMessagesText([message]), [message])
 
     return (
       <Message
@@ -355,46 +401,89 @@ const UserMessage = React.memo(
         data-message-id={message.id}
         data-message-role={message.role}
       >
-        <div className="group flex w-full flex-col items-end gap-1">
-          {message.parts.filter(isFileUIPart).map((part, index) => (
-            <FileMessage key={`${part.url}-${index}`} part={part} tone="user" />
-          ))}
-          {message.parts.some((part) => part.type === "text" && part.text) ? (
-            <MessageContent
-              layoutId={message.id}
-              className="bg-muted text-foreground max-w-[85%] rounded-3xl px-5 py-2.5 whitespace-pre-wrap sm:max-w-[75%]"
-            >
-              {renderUserTextWithSkillChips(message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""))}
-            </MessageContent>
-          ) : null}
-          {!isStreaming && (
-            <MessageActions
-              className={cn(
-                "flex gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-              )}
-            >
-              <CopyMessageButton messages={[message]} />
-              <MessageAction tooltip="Branch in new chat">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => onForkAtMessage(message.id)}
-                >
-                  <Split className="rotate-90" />
-                </Button>
-              </MessageAction>
-              <MessageAction tooltip="Revert">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => onRevertToUserMessage(message.id)}
-                >
-                  <Undo2 />
-                </Button>
-              </MessageAction>
-            </MessageActions>
-          )}
-        </div>
+        <ContextMenu>
+          <ContextMenuTrigger
+            render={
+              <div className="group flex w-full flex-col items-end gap-1">
+                {message.parts.filter(isFileUIPart).map((part, index) => (
+                  <FileMessage key={`${part.url}-${index}`} part={part} tone="user" />
+                ))}
+                {message.parts.some((part) => part.type === "text" && part.text) ? (
+                  <MessageContent
+                    layoutId={message.id}
+                    className="bg-muted text-foreground max-w-[85%] rounded-3xl px-5 py-2.5 whitespace-pre-wrap sm:max-w-[75%]"
+                  >
+                    {renderUserTextWithSkillChips(message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""))}
+                  </MessageContent>
+                ) : null}
+                {!isStreaming && (
+                  <MessageActions
+                    className={cn(
+                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                    )}
+                  >
+                    <MessageTimestamp message={message} className="mr-1.5" />
+                    <CopyMessageButton messages={[message]} />
+                    {messageText ? (
+                      <MessageAction tooltip="Edit message">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Edit message"
+                          onClick={() => onEditUserMessage(message.id, messageText)}
+                        >
+                          <Pencil />
+                        </Button>
+                      </MessageAction>
+                    ) : null}
+                    <MessageAction tooltip="Branch in new chat">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Branch in new chat"
+                        onClick={() => onForkAtMessage(message.id)}
+                      >
+                        <Split className="rotate-90" />
+                      </Button>
+                    </MessageAction>
+                    <MessageAction tooltip="Revert">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Revert"
+                        onClick={() => onRevertToUserMessage(message.id)}
+                      >
+                        <Undo2 />
+                      </Button>
+                    </MessageAction>
+                  </MessageActions>
+                )}
+              </div>
+            }
+          />
+          <ContextMenuContent className="w-56">
+            {messageText ? (
+              <ContextMenuItem onClick={() => onEditUserMessage(message.id, messageText)}>
+                <Pencil className="size-4" />
+                Edit message
+              </ContextMenuItem>
+            ) : null}
+            {messageText ? (
+              <ContextMenuItem onClick={() => void navigator.clipboard.writeText(messageText)}>
+                <Copy className="size-4" />
+                Copy
+              </ContextMenuItem>
+            ) : null}
+            <ContextMenuItem onClick={() => onForkAtMessage(message.id)}>
+              <Split className="size-4 rotate-90" />
+              Branch in new chat
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => onRevertToUserMessage(message.id)}>
+              <Undo2 className="size-4" />
+              Revert
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       </Message>
     )
   }
@@ -446,7 +535,7 @@ const MessageComponent = React.memo(
 
 MessageComponent.displayName = "MessageComponent"
 
-const LoadingMessage = React.memo(() => (
+const LoadingMessage = React.memo(({ label }: { label?: string }) => (
   <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
     <div className="group flex w-full flex-col gap-0">
       <div className="flex items-center gap-1.5 px-1 py-1 text-sm text-muted-foreground">
@@ -462,7 +551,7 @@ const LoadingMessage = React.memo(() => (
             style={{ backgroundColor: "#818cf8", width: "100%", height: "100%", borderRadius: "50%" }}
           />
         </div>
-        <span>Thinking…</span>
+        <span>{label ?? "Thinking…"}</span>
       </div>
     </div>
   </Message>
@@ -552,10 +641,20 @@ const isMessageEmptyGroup = (messages: UIMessageWithIndex[]) =>
 
 const getRenderableMessages = (messages: UIMessageWithIndex[]) =>
   messages.flatMap((item) => {
-    const parts = item.message.parts.filter((part) => part.type === "text" || part.type === "file");
+    const renderableMessage = getRenderableMessage(item.message);
 
-    return parts.length > 0 ? [{ ...item, message: { ...item.message, parts } }] : []
+    return renderableMessage ? [{ ...item, message: renderableMessage }] : []
   })
+
+function getRenderableMessage(message: UIMessage) {
+  const parts = message.parts.filter((part) => part.type === "text" || part.type === "file");
+
+  return parts.length > 0 ? { ...message, parts } : null;
+}
+
+function MessageArtifacts(props: { message: UIMessage }) {
+  return <ArtifactList messages={[props.message]} includeTargetFallbacks={false} />;
+}
 
 interface AssistantMessageGroupProps {
   items: UIMessageWithIndex[]
@@ -569,15 +668,21 @@ function MessageGroup({
   isStreaming,
 }: AssistantMessageGroupProps) {
   const { onRevertToUserMessage, onForkAtMessage } = useMessageList()
-  const [open, setOpen] = React.useState(false)
-  // Only run layout animations while the collapsible is expanding/collapsing.
-  // Otherwise (e.g. while streaming) layout changes apply instantly.
-  const [isAnimating, setIsAnimating] = React.useState(false)
-  const layoutTransition = isAnimating
-  ? { type: "spring" as const, bounce: 0.1, duration: 0.1 }
-  : { duration: 0 }
-
   const lastItem = items[items.length - 1]
+  // Branch/revert must target a real server-side message id. Synthetic
+  // client-side messages (e.g. session errors) don't exist on the server and
+  // silently corrupt fork/revert boundaries.
+  const lastRealItem = items.findLast((item) => !isSessionErrorMessage(item.message))
+  const isLiveGroup = isStreaming && lastItem !== undefined && lastItem.index === messages.length - 1
+  const stepsRef = React.useRef<HTMLDivElement>(null)
+
+  // Keep the capped step run pinned to the latest step while streaming.
+  React.useEffect(() => {
+    const node = stepsRef.current
+    if (node && isLiveGroup) {
+      node.scrollTop = node.scrollHeight
+    }
+  })
 
   if (!lastItem || isMessageEmptyGroup(items)) {
     if (isStreaming) {
@@ -590,92 +695,75 @@ function MessageGroup({
   const renderableItems = getRenderableMessages(items)
   const lastTextMessage = getLastTextPart(lastItem.message)
 
-  return (
-    <LayoutGroup>
-      <div className="flex flex-col gap-2 group/message-group">
-      <Steps
-        className="mx-auto w-full max-w-3xl"
-        open={open}
-        onOpenChange={(next) => {
-          setIsAnimating(true)
-          setOpen(next)
-        }}
-      >
-        <StepsTrigger className="px-2 md:px-10">
-          {items.length} steps
-        </StepsTrigger>
-        <StepsContent>
-          {items.map((item, groupIndex) => {
-            const isLastMessage = item.index === messages.length - 1
-            const isLastStep = groupIndex === items.length - 1
+  // Leading messages without prose (tool/reasoning steps) render inside a
+  // height-capped scroll area so long runs stay compact; messages with text
+  // or files render inline below it.
+  let stepCount = 0
+  while (stepCount < items.length && !getRenderableMessage(items[stepCount].message)) {
+    stepCount += 1
+  }
+  const stepItems = items.slice(0, stepCount)
+  const proseItems = items.slice(stepCount)
 
-            return (
-              <motion.div
-                key={`${groupIndex}-${item.message.id}`}
-                layoutId={`msg-${item.message.id}`}
-                layout
-                transition={layoutTransition}
-                onLayoutAnimationComplete={() => setIsAnimating(false)}
-              >
-                <MessageComponent
-                  message={item.message}
-                  isLastMessage={isLastMessage}
-                  isStreaming={isLastMessage && isStreaming}
-                  isLastStep={isLastStep}
-                />
-              </motion.div>
-            )
-          })}
-        </StepsContent>
-      </Steps>
-      <AnimatePresence initial={false}>
-        {!open ? renderableItems.map(({ index, message }) => (
-          <motion.div
-            key={message.id}
-            layoutId={`msg-${message.id}`}
-            layout
-            transition={layoutTransition}
-            onLayoutAnimationComplete={() => setIsAnimating(false)}
-          >
-            <MessageComponent
-              message={message}
-              isStreaming={index === messages.length - 1 && isStreaming}
-              isLastMessage={index === messages.length - 1}
-              isLastStep={index === items.length}
-            />
-          </motion.div>
-        )) : null}
-      </AnimatePresence>
-      <ArtifactList messages={items.map((item) => item.message)} />
+  const renderItem = (item: UIMessageWithIndex, groupIndex: number) => {
+    const isLastMessage = item.index === messages.length - 1
+
+    return (
+      <div key={item.message.id}>
+        <MessageComponent
+          message={item.message}
+          isLastMessage={isLastMessage}
+          isStreaming={isLastMessage && isStreaming}
+          isLastStep={groupIndex === items.length - 1}
+        />
+        <MessageArtifacts message={item.message} />
+      </div>
+    )
+  }
+
+  return (
+      <div className="flex flex-col gap-2 group/message-group">
+      {stepItems.length > 0 ? (
+        <div ref={stepsRef} className="max-h-[520px] overflow-y-auto">
+          {stepItems.map((item, groupIndex) => renderItem(item, groupIndex))}
+        </div>
+      ) : null}
+      {proseItems.map((item, groupIndex) => renderItem(item, stepItems.length + groupIndex))}
       {lastTextMessage && !isStreaming && (
         <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 md:px-8">
           <MessageActions className="flex gap-0">
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
-            <MessageAction tooltip="Branch in new chat">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onForkAtMessage(lastItem.message.id)}
-              >
-                <Split className="rotate-90" />
-              </Button>
-            </MessageAction>
-            <MessageAction tooltip="Revert">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onRevertToUserMessage(lastItem.message.id)}
-              >
-                <Undo2 />
-              </Button>
-            </MessageAction>
+            {lastRealItem ? (
+              <>
+                <MessageAction tooltip="Branch in new chat">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Branch in new chat"
+                    onClick={() => onForkAtMessage(lastRealItem.message.id)}
+                  >
+                    <Split className="rotate-90" />
+                  </Button>
+                </MessageAction>
+                <MessageAction tooltip="Revert">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Revert"
+                    onClick={() => onRevertToUserMessage(lastRealItem.message.id)}
+                  >
+                    <Undo2 />
+                  </Button>
+                </MessageAction>
+              </>
+            ) : null}
           </MessageActions>
+          <MessageTimestamp message={lastItem.message} />
           {/* <MessageSources messages={items.map((item) => item.message)} /> */}
         </div>
       )}
       {renderableItems.length === 0 && !isStreaming ? <EmptyMessage /> : null}
       </div>
-    </LayoutGroup>
   )
 }
 
@@ -690,6 +778,9 @@ export function MessageList({ messages, status, retryStatus }: MessageListProps)
   const items = React.useMemo(() => groupMessages(messages, status), [messages, status]);
   const error = useSessionErrorMessage();
   const hasSessionErrorMessage = React.useMemo(() => messages.some(isSessionErrorMessage), [messages])
+  const liveActionLabel = isStreaming
+    ? getActiveToolLabel(collectToolParts(messages))
+    : null
 
   return (
     <div className={cn("flex flex-col gap-2 @container/message-list")}>
@@ -719,11 +810,12 @@ export function MessageList({ messages, status, retryStatus }: MessageListProps)
               isStreaming={isLastMessage && isStreaming}
               isLastStep={isLastStep}
             />
+            <MessageArtifacts message={item.message} />
           </div>
         )
       })}
 
-      {status === "streaming" && <LoadingMessage />}
+      {status === "streaming" && <LoadingMessage label={liveActionLabel ?? undefined} />}
       {retryStatus ? <RetryMessage status={retryStatus} /> : null}
       {error && !hasSessionErrorMessage ? <ErrorMessage error={error} /> : null}
     </div>

@@ -11,12 +11,13 @@ export function truncateText(value: string, max: number) {
 
 export function toolDisplayTitle(
   title: string | null,
-  fallback: string,
   detail?: string
-) {
-  const primary = title ?? fallback
-  if (!detail) {
-    return primary
+): string | undefined {
+  if (!title) {
+    return undefined
   }
-  return `${primary} ${detail}`
+  if (!detail) {
+    return title
+  }
+  return `${title} ${detail}`
 }

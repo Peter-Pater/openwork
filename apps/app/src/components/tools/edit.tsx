@@ -23,5 +23,5 @@ function getEditToolTitle(part: EditToolPart): string | null {
 }
 
 export function EditTool({ part }: EditToolProps) {
-  return <Tool toolPart={part} title={getEditToolTitle(part) ?? "edit"} />
+  return <Tool toolPart={part} title={getEditToolTitle(part) ?? undefined} />
 }

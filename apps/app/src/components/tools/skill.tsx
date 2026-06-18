@@ -8,7 +8,7 @@ interface SkillToolProps {
 }
 
 function getSkillToolTitle(part: SkillToolPart): string | null {
-  const name = part.input.name.trim()
+  const name = part.input?.name?.trim() ?? ""
 
   if (part.state === "output-error") {
     return name ? `Load skill ${name} attempted` : "Load skill attempted"
@@ -22,5 +22,5 @@ function getSkillToolTitle(part: SkillToolPart): string | null {
 }
 
 export function SkillTool({ part }: SkillToolProps) {
-  return <Tool toolPart={part} title={getSkillToolTitle(part) ?? "skill"} />
+  return <Tool toolPart={part} title={getSkillToolTitle(part) ?? undefined} />
 }

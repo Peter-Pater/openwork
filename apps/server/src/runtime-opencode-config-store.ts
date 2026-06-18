@@ -60,6 +60,25 @@ function runtimeDbPath(config: ServerConfig): string {
   return join(configDir, "runtime.sqlite");
 }
 
+/** Directory holding runtime state (the SQLite DB and derived files). */
+export function runtimeStorageDir(config: ServerConfig): string {
+  return dirname(runtimeDbPath(config));
+}
+
+export type RuntimeOpencodeConfigWriteListener = (config: ServerConfig, workspaceId: string) => void;
+
+const writeListeners = new Set<RuntimeOpencodeConfigWriteListener>();
+
+/**
+ * Observe runtime config writes. Used to keep derived state (e.g. the
+ * engine-visible runtime config file) in sync with the DB. Returns an
+ * unsubscribe function. Listeners must not throw.
+ */
+export function onRuntimeOpencodeConfigWrite(listener: RuntimeOpencodeConfigWriteListener): () => void {
+  writeListeners.add(listener);
+  return () => writeListeners.delete(listener);
+}
+
 async function openRuntimeDb(path: string): Promise<RuntimeOpencodeDb> {
   await ensureDir(dirname(path));
   if (typeof process.versions.bun === "string") {
@@ -155,6 +174,7 @@ export async function writeRuntimeOpencodeConfig(
   const now = Date.now();
   const configJson = JSON.stringify(next);
   db.upsert({ workspaceId, configJson, updatedAt: now });
+  for (const listener of writeListeners) listener(config, workspaceId);
   return next;
 }
 

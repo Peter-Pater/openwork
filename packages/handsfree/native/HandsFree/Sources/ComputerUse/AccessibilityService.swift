@@ -15,16 +15,19 @@ final class AccessibilityService: @unchecked Sendable {
         "AXOutline", "AXTable", "AXList", "AXGroup",
     ]
 
-    func resolveTarget(appName: String?) throws -> WindowTarget {
-        try resolveTarget(appName: appName, windowTitle: nil)
-    }
+    private let enhancedLock = NSLock()
+    private var enhancedPIDs = Set<pid_t>()
 
-    func resolveTarget(appName: String?, windowTitle: String?) throws -> WindowTarget {
+    func resolveTarget(appName: String?, pid requestedPID: pid_t? = nil, windowTitle: String? = nil) throws -> WindowTarget {
         guard AXIsProcessTrusted() else { throw ComputerUseError.accessibilityDenied }
 
-        let app = try resolveApp(appName: appName)
+        let app = try resolveApp(appName: appName, pid: requestedPID)
         let pid = app.processIdentifier
         let axApp = AXUIElementCreateApplication(pid)
+        if enableEnhancedAccessibility(axApp: axApp, pid: pid) {
+            // Chromium and Electron build the renderer AX tree lazily; give it a moment.
+            Thread.sleep(forTimeInterval: 0.35)
+        }
         let axWindow = firstAXWindow(axApp: axApp, title: windowTitle)
         let title = axWindow.flatMap { axString($0, kAXTitleAttribute) }
         let info = firstCGWindowInfo(pid: pid, title: title)
@@ -93,7 +96,35 @@ final class AccessibilityService: @unchecked Sendable {
         AXUIElementPerformAction(record.element, action as CFString) == .success
     }
 
-    private func resolveApp(appName: String?) throws -> NSRunningApplication {
+    func value(record: AXElementRecord) -> String? {
+        axString(record.element, kAXValueAttribute)
+    }
+
+    /// Chromium browsers and Electron apps only expose web content to AX after an
+    /// assistive client announces itself. VoiceOver does this by setting
+    /// AXEnhancedUserInterface; Electron additionally supports AXManualAccessibility.
+    /// Returns true when the attribute was newly applied to this pid.
+    private func enableEnhancedAccessibility(axApp: AXUIElement, pid: pid_t) -> Bool {
+        enhancedLock.lock()
+        let isNew = enhancedPIDs.insert(pid).inserted
+        enhancedLock.unlock()
+        guard isNew else { return false }
+        // Chromium reacts to the set attempt even though it reports an AXError
+        // (.notImplemented / .attributeUnsupported), so the return codes are
+        // logged for diagnostics but intentionally not treated as failure.
+        let enhanced = AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        let manual = AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        fputs("[ComputerUse] enhanced-ax pid=\(pid) AXEnhancedUserInterface=\(enhanced.rawValue) AXManualAccessibility=\(manual.rawValue)\n", stderr)
+        return true
+    }
+
+    private func resolveApp(appName: String?, pid: pid_t?) throws -> NSRunningApplication {
+        if let pid {
+            guard let app = NSRunningApplication(processIdentifier: pid) else {
+                throw ComputerUseError.appNotFound("pid \(pid)")
+            }
+            return app
+        }
         guard let rawName = appName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
             guard let frontmost = NSWorkspace.shared.frontmostApplication else {
                 throw ComputerUseError.noFrontmostApplication

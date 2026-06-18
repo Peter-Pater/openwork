@@ -72,17 +72,40 @@ enum BackgroundInputDispatcher {
         guard let source = CGEventSource(stateID: .combinedSessionState) else {
             throw ComputerUseError.eventSourceFailed
         }
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: parsed.keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: parsed.keyCode, keyDown: false) else {
-            throw ComputerUseError.eventCreationFailed
+
+        // Post real modifier key events around the main key. Chromium and other
+        // apps ignore bare flag bits on background-posted events, so flags alone
+        // are not enough for combos like command+a.
+        let modifierKeys: [(flag: CGEventFlags, keyCode: CGKeyCode)] = [
+            (.maskCommand, 0x37), (.maskShift, 0x38), (.maskAlternate, 0x3A), (.maskControl, 0x3B),
+        ]
+        let activeModifiers = modifierKeys.filter { parsed.flags.contains($0.flag) }
+
+        var accumulated: CGEventFlags = []
+        for modifier in activeModifiers {
+            accumulated.insert(modifier.flag)
+            try postKey(source: source, pid: pid, keyCode: modifier.keyCode, keyDown: true, flags: accumulated)
+            Thread.sleep(forTimeInterval: 0.005)
         }
 
-        down.flags = parsed.flags
-        up.flags = parsed.flags
-        down.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(pid))
-        up.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(pid))
-        down.postToPid(pid)
-        up.postToPid(pid)
+        try postKey(source: source, pid: pid, keyCode: parsed.keyCode, keyDown: true, flags: parsed.flags)
+        Thread.sleep(forTimeInterval: 0.01)
+        try postKey(source: source, pid: pid, keyCode: parsed.keyCode, keyDown: false, flags: parsed.flags)
+
+        for modifier in activeModifiers.reversed() {
+            accumulated.remove(modifier.flag)
+            Thread.sleep(forTimeInterval: 0.005)
+            try postKey(source: source, pid: pid, keyCode: modifier.keyCode, keyDown: false, flags: accumulated)
+        }
+    }
+
+    private static func postKey(source: CGEventSource, pid: pid_t, keyCode: CGKeyCode, keyDown: Bool, flags: CGEventFlags) throws {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: keyDown) else {
+            throw ComputerUseError.eventCreationFailed
+        }
+        event.flags = flags
+        event.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(pid))
+        event.postToPid(pid)
     }
 
     static func address(_ event: CGEvent, pid: pid_t, windowNumber: Int) {

@@ -12,6 +12,7 @@ const EnvSchema = z.object({
   BETTER_AUTH_URL: z.string().min(1),
   DEN_MCP_RESOURCE_URL: z.string().optional(),
   DEN_BETTER_AUTH_TRUSTED_ORIGINS: z.string().optional(),
+  DEN_WEB_APP_HOSTS: z.string().optional(),
   GITHUB_CLIENT_ID: z.string().optional(),
   GITHUB_CLIENT_SECRET: z.string().optional(),
   GITHUB_CONNECTOR_APP_ID: z.string().optional(),
@@ -58,6 +59,8 @@ const EnvSchema = z.object({
   VERCEL_TEAM_ID: z.string().optional(),
   VERCEL_TEAM_SLUG: z.string().optional(),
   VERCEL_DNS_DOMAIN: z.string().optional(),
+  DEN_PLAN_GATING_ENABLED: z.string().optional(),
+  SCIM_MAINTENANCE_INTERVAL_MS: z.string().optional(),
   POLAR_FEATURE_GATE_ENABLED: z.string().optional(),
   POLAR_API_BASE: z.string().optional(),
   POLAR_ACCESS_TOKEN: z.string().optional(),
@@ -154,6 +157,9 @@ const betterAuthTrustedOrigins = splitCsv(parsed.DEN_BETTER_AUTH_TRUSTED_ORIGINS
 const polarFeatureGateEnabled =
   (parsed.POLAR_FEATURE_GATE_ENABLED ?? "false").toLowerCase() === "true"
 
+const planGatingEnabled =
+  (parsed.DEN_PLAN_GATING_ENABLED ?? "false").toLowerCase() === "true"
+
 const devMode = (parsed.OPENWORK_DEV_MODE ?? "0").trim() === "1"
 const requireEmailVerification = parsed.DEN_REQUIRE_EMAIL_VERIFICATION === undefined
   ? !devMode
@@ -185,7 +191,13 @@ export const env = {
       ? `http://127.0.0.1:${port}/mcp`
       : undefined,
   betterAuthTrustedOrigins: betterAuthTrustedOrigins.length > 0 ? betterAuthTrustedOrigins : corsOrigins,
+  // Extra hostnames that serve the den-web frontend (and therefore expose
+  // the Den API behind the /api/den proxy path). Entries starting with "."
+  // are treated as suffix matches, e.g. ".example.com".
+  webAppHosts: splitCsv(parsed.DEN_WEB_APP_HOSTS).map((host) => host.toLowerCase()),
   devMode,
+  planGatingEnabled,
+  scimMaintenanceIntervalMs: Number(parsed.SCIM_MAINTENANCE_INTERVAL_MS ?? "300000"),
   requireEmailVerification,
   github: {
     clientId: optionalString(parsed.GITHUB_CLIENT_ID),

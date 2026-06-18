@@ -1,8 +1,8 @@
 import type { Message, Part, Session, Todo } from "@opencode-ai/sdk/v2/client";
 import { desktopFetch } from "./desktop";
-import { isDesktopRuntime } from "../utils";
+import { isDesktopRuntime } from "./runtime-env";
 import type { ExecResult, OpencodeConfigFile, WorkspaceInfo, WorkspaceList } from "./desktop";
-import type { DenOrgMarketplace, DenOrgPluginResolved, DenResourceSnapshot } from "./den";
+import type { DenOrgMarketplace, DenOrgPluginResolved, DenResourceSnapshot } from "./den-types";
 import type { CloudImportedMarketplace, CloudImportedPlugin } from "../cloud/import-state";
 
 export type OpenworkServerCapabilities = {
@@ -94,14 +94,9 @@ export type OpenworkServerSettings = {
   remoteAccessEnabled?: boolean;
 };
 
-export type OpenworkWorkspaceInfo = WorkspaceInfo & {
-  opencode?: {
-    baseUrl?: string;
-    directory?: string;
-    username?: string;
-    password?: string;
-  };
-};
+// The shared WorkspaceWire contract now carries the opencode block; keep the
+// historical name as an alias for the many existing imports.
+export type OpenworkWorkspaceInfo = WorkspaceInfo;
 
 export type OpenworkWorkspaceList = {
   items: OpenworkWorkspaceInfo[];
@@ -175,6 +170,12 @@ export type OpenworkWorkspaceFileWriteResult = {
   bytes: number;
   updatedAt: number;
   revision?: string;
+};
+
+export type OpenworkWorkspaceFileDeleteResult = {
+  ok: boolean;
+  path: string;
+  code?: string;
 };
 
 export type OpenworkAuthorizedFoldersResponse = {
@@ -252,6 +253,22 @@ export type OpenworkCloudPluginsResult = {
   plugins: Record<string, CloudImportedPlugin>;
 };
 
+export type OpenworkClaudePluginComponent = {
+  type: "mcp" | "skill" | "command" | "agent";
+  name: string;
+  description: string | null;
+};
+
+export type OpenworkClaudePluginPreview = {
+  pluginId: string;
+  name: string;
+  description: string | null;
+  version: string | null;
+  source: { owner: string; repo: string; ref: string; dir: string | null };
+  components: OpenworkClaudePluginComponent[];
+  warnings: string[];
+};
+
 function arrayBufferToBase64(data: ArrayBuffer): string {
   const bytes = new Uint8Array(data);
   let binary = "";
@@ -277,6 +294,12 @@ export type OpenworkMcpItem = {
   config: Record<string, unknown>;
   source: "config.project" | "config.global" | "config.remote";
   disabledByTools?: boolean;
+};
+
+export type OpenworkMcpEngineSync = {
+  status: "ok" | "failed";
+  at: number;
+  failures: Array<{ name: string; status?: number; message?: string }>;
 };
 
 export type OpenworkWorkspaceExport = {
@@ -351,6 +374,7 @@ export type GoogleWorkspaceAccount = {
 export type GoogleWorkspaceAuthStatus = {
   configured: boolean;
   missing: string[];
+  customClient: boolean;
   vault: "encrypted" | "plaintext-dev" | "unavailable";
   connected: boolean;
   account: GoogleWorkspaceAccount | null;
@@ -473,6 +497,27 @@ export type OpenworkReloadEvent = {
   workspaceId: string;
   reason: "plugins" | "skills" | "mcp" | "config" | "agents" | "commands";
   trigger?: OpenworkReloadTrigger;
+  timestamp: number;
+};
+
+export type OpenworkSessionGroupDefinition = {
+  id: string;
+  label: string;
+};
+
+export type OpenworkSessionGroupState = {
+  groups: OpenworkSessionGroupDefinition[];
+  assignments: Record<string, string>;
+};
+
+export type OpenworkSessionGroupEvent = {
+  id: string;
+  seq: number;
+  workspaceId: string;
+  type: "session_groups.updated";
+  action: "created" | "updated" | "deleted" | "assigned" | "reordered" | "imported";
+  groupId?: string;
+  sessionId?: string;
   timestamp: number;
 };
 
@@ -1006,9 +1051,10 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
     status: () => requestJson<OpenworkServerDiagnostics>(baseUrl, "/status", { token, hostToken, timeoutMs: timeouts.status }),
     capabilities: () => requestJson<OpenworkServerCapabilities>(baseUrl, "/capabilities", { token, hostToken, timeoutMs: timeouts.capabilities }),
     googleWorkspaceStatus: () => requestJson<GoogleWorkspaceAuthStatus>(baseUrl, "/experimental/google-workspace/status", { token, hostToken, timeoutMs: timeouts.status }),
-    googleWorkspaceConnectStart: () => requestJson<GoogleWorkspaceConnectStart>(baseUrl, "/experimental/google-workspace/connect/start", { token, hostToken, method: "POST", timeoutMs: timeouts.status }),
+    googleWorkspaceConnectStart: (options?: { gmailRead?: boolean; features?: string[] }) => requestJson<GoogleWorkspaceConnectStart>(baseUrl, "/experimental/google-workspace/connect/start", { token, hostToken, method: "POST", body: { gmailRead: options?.gmailRead === true, features: options?.features ?? [] }, timeoutMs: timeouts.status }),
     googleWorkspaceConnectStatus: (flowId: string) => requestJson<GoogleWorkspaceConnectStatus>(baseUrl, `/experimental/google-workspace/connect/status/${encodeURIComponent(flowId)}`, { token, hostToken, timeoutMs: timeouts.status }),
     googleWorkspaceDisconnect: (accountId?: string | null) => requestJson<GoogleWorkspaceAuthStatus>(baseUrl, "/experimental/google-workspace/disconnect", { token, hostToken, method: "POST", body: accountId ? { accountId } : {}, timeoutMs: timeouts.status }),
+    googleWorkspaceSetActiveAccount: (accountId: string) => requestJson<GoogleWorkspaceAuthStatus>(baseUrl, "/experimental/google-workspace/active-account", { token, hostToken, method: "POST", body: { accountId }, timeoutMs: timeouts.status }),
     googleWorkspaceTestConnection: () => requestJson<GoogleWorkspaceAuthStatus>(baseUrl, "/experimental/google-workspace/test", { token, hostToken, method: "POST", timeoutMs: 60_000 }),
     googleWorkspaceRunScopeSmokeTest: () => requestJson<GoogleWorkspaceAuthStatus>(baseUrl, "/experimental/google-workspace/smoke-test", { token, hostToken, method: "POST", timeoutMs: 120_000 }),
     callExtensionAction: (payload: OpenworkExtensionActionCall) =>
@@ -1090,6 +1136,56 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/sessions${suffix}`,
         { token, hostToken, timeoutMs: timeouts.sessionRead },
+      );
+    },
+    getSessionGroups: (workspaceId: string) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number | null }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups`,
+        { token, hostToken, timeoutMs: timeouts.sessionRead },
+      ),
+    putSessionGroups: (workspaceId: string, state: OpenworkSessionGroupState) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups`,
+        { token, hostToken, method: "PUT", body: { state }, timeoutMs: timeouts.config },
+      ),
+    createSessionGroup: (workspaceId: string, input: { id?: string; label: string }) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups`,
+        { token, hostToken, method: "POST", body: input, timeoutMs: timeouts.config },
+      ),
+    reorderSessionGroups: (workspaceId: string, groupIds: string[]) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups/reorder`,
+        { token, hostToken, method: "PATCH", body: { groupIds }, timeoutMs: timeouts.config },
+      ),
+    assignSessionGroup: (workspaceId: string, sessionId: string, groupId: string | null) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups/assignments/${encodeURIComponent(sessionId)}`,
+        { token, hostToken, method: "PATCH", body: { groupId }, timeoutMs: timeouts.config },
+      ),
+    renameSessionGroup: (workspaceId: string, groupId: string, label: string) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups/${encodeURIComponent(groupId)}`,
+        { token, hostToken, method: "PATCH", body: { label }, timeoutMs: timeouts.config },
+      ),
+    removeSessionGroup: (workspaceId: string, groupId: string) =>
+      requestJson<{ state: OpenworkSessionGroupState; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups/${encodeURIComponent(groupId)}`,
+        { token, hostToken, method: "DELETE", timeoutMs: timeouts.config },
+      ),
+    listSessionGroupEvents: (workspaceId: string, options?: { since?: number }) => {
+      const query = typeof options?.since === "number" ? `?since=${options.since}` : "";
+      return requestJson<{ items: OpenworkSessionGroupEvent[]; cursor?: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/session-groups/events${query}`,
+        { token, hostToken },
       );
     },
     getSession: (workspaceId: string, sessionId: string) =>
@@ -1247,6 +1343,22 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         method: "DELETE",
         timeoutMs: timeouts.config,
       }),
+    previewClaudePlugin: (workspaceId: string, payload: { url: string; ref?: string }) =>
+      requestJson<{ preview: OpenworkClaudePluginPreview }>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/claude-plugins`, {
+        token,
+        hostToken,
+        method: "POST",
+        body: { ...payload, dryRun: true },
+        timeoutMs: timeouts.config,
+      }),
+    installClaudePlugin: (workspaceId: string, payload: { url: string; ref?: string }) =>
+      requestJson<OpenworkCloudPluginInstallResult & { preview: OpenworkClaudePluginPreview }>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/claude-plugins`, {
+        token,
+        hostToken,
+        method: "POST",
+        body: payload,
+        timeoutMs: timeouts.config,
+      }),
     readOpencodeConfigFile: (workspaceId: string, scope: "project" | "global" = "project") => {
       const query = `?scope=${scope}`;
       return requestJson<OpencodeConfigFile>(baseUrl, `/workspace/${encodeURIComponent(workspaceId)}/opencode-config${query}`, {
@@ -1361,7 +1473,11 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         },
       ),
     listMcp: (workspaceId: string) =>
-      requestJson<{ items: OpenworkMcpItem[] }>(baseUrl, `/workspace/${workspaceId}/mcp`, { token, hostToken }),
+      requestJson<{ items: OpenworkMcpItem[]; engineSync?: OpenworkMcpEngineSync | null }>(
+        baseUrl,
+        `/workspace/${workspaceId}/mcp`,
+        { token, hostToken },
+      ),
     addMcp: (workspaceId: string, payload: { name: string; config: Record<string, unknown> }) =>
       requestJson<{ items: OpenworkMcpItem[] }>(baseUrl, `/workspace/${workspaceId}/mcp`, {
         token,
@@ -1521,6 +1637,48 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
           body: payload,
         },
       ),
+
+    deleteWorkspaceFiles: async (
+      workspaceId: string,
+      files: Array<{ path: string; recursive?: boolean }>,
+    ): Promise<OpenworkWorkspaceFileDeleteResult[]> => {
+      if (files.length === 0) return [];
+      const created = await requestJson<{ session: { id: string } }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/files/sessions`,
+        { token, hostToken, method: "POST", body: { write: true } },
+      );
+      const sessionId = created.session.id;
+      try {
+        const result = await requestJson<{ items: Array<{ ok?: boolean; path?: string; code?: string }> }>(
+          baseUrl,
+          `/files/sessions/${encodeURIComponent(sessionId)}/ops`,
+          {
+            token,
+            hostToken,
+            method: "POST",
+            body: {
+              operations: files.map((file) => ({
+                type: "delete",
+                path: file.path,
+                recursive: file.recursive === true,
+              })),
+            },
+          },
+        );
+        return result.items.map((item, index) => ({
+          ok: item.ok === true,
+          path: typeof item.path === "string" ? item.path : files[index]?.path ?? "",
+          ...(typeof item.code === "string" ? { code: item.code } : {}),
+        }));
+      } finally {
+        await requestJson<{ ok: boolean }>(baseUrl, `/files/sessions/${encodeURIComponent(sessionId)}`, {
+          token,
+          hostToken,
+          method: "DELETE",
+        }).catch(() => undefined);
+      }
+    },
 
     writeWorkspaceBinaryFile: (
       workspaceId: string,

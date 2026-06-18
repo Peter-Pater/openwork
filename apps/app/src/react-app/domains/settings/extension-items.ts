@@ -1,5 +1,6 @@
 import { getMcpServerName, isBuiltInOpenWorkExtension, type McpDirectoryInfo } from "../../../app/constants";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "../../../app/cloud/import-state";
+import type { PendingCloudPluginChange } from "../../../app/cloud/desktop-cloud-sync";
 import { evaluateEnablement, type EnablementContext } from "../../../app/enablement";
 import type { EnablementResult } from "../../../app/extensions";
 import type { DenOrgMarketplaceResolved, DenOrgPlugin } from "../../../app/lib/den";
@@ -31,6 +32,8 @@ export type ExtensionItem = {
   marketplaceName?: string;
   plugin?: DenOrgPlugin;
   importedPlugin?: CloudImportedPlugin;
+  /** Installed cloud plugin that was removed from the organization marketplace. */
+  removedUpstream?: boolean;
   mcpEntry?: McpDirectoryInfo;
   skill?: { name: string; description?: string; path: string };
 };
@@ -40,6 +43,7 @@ export type ExtensionItemBuildInput = {
   mcpServers: McpServerEntry[];
   installedSkills: Array<{ name: string; description?: string; path: string }>;
   importedCloudPlugins: Record<string, CloudImportedPlugin>;
+  pendingCloudPluginChanges?: Record<string, PendingCloudPluginChange>;
   cloudMarketplaces: DenOrgMarketplaceResolved[];
   enablementContext: EnablementContext;
   isBuiltInConnected: (entry: McpDirectoryInfo) => boolean;
@@ -120,7 +124,8 @@ export function buildExtensionItems(input: ExtensionItemBuildInput) {
     const imported = input.importedCloudPlugins[plugin.id] ?? null;
     const manifest = plugin.extension?.manifest ?? undefined;
     const enablement = manifest?.enablement ? evaluateEnablement(manifest.enablement, input.enablementContext) : null;
-    const installState = cloudPluginStatus(imported, plugin);
+    const pendingChange = input.pendingCloudPluginChanges?.[plugin.id];
+    const installState = imported && pendingChange === "modified" ? "update_available" : cloudPluginStatus(imported, plugin);
     return {
       id: `marketplace:${marketplace.marketplace.id}:${plugin.id}`,
       source: "marketplace",
@@ -156,6 +161,7 @@ export function buildExtensionItems(input: ExtensionItemBuildInput) {
       resources: plugin.files.map(resourceFromImportedFile),
       marketplaceId: plugin.marketplaceId,
       importedPlugin: plugin,
+      removedUpstream: input.pendingCloudPluginChanges?.[plugin.pluginId] === "removed",
     }];
   });
 
@@ -209,8 +215,23 @@ export function buildExtensionItems(input: ExtensionItemBuildInput) {
     builtInItems,
     cloudPluginItems: [...cloudPluginItems, ...importedPluginItems],
     installedMcpEntries: [
-      ...builtInItems.flatMap((item) => item.builtInEntry ? [item.builtInEntry] : []),
+      ...builtInItems.flatMap((item) => item.active && item.builtInEntry ? [item.builtInEntry] : []),
       ...standaloneMcpEntries,
+    ],
+    // The MCP quick-connect surface ("Available apps · One-click connect")
+    // needs unconfigured directory entries too — otherwise Notion, Linear,
+    // OpenWork Cloud Control, etc. are undiscoverable for anyone who is not
+    // signed in to cloud (regression from #2008, which narrowed the section
+    // to installed entries only).
+    quickConnectEntries: [
+      ...builtInItems.flatMap((item) => item.active && item.builtInEntry ? [item.builtInEntry] : []),
+      ...standaloneMcpEntries,
+      ...input.quickConnect.filter((entry) => {
+        if (isBuiltInOpenWorkExtension(entry)) return false;
+        const serverName = getMcpServerName(entry);
+        if (groupedMcpServerNames.has(serverName)) return false;
+        return !input.mcpServers.some((server) => server.name === serverName);
+      }),
     ],
     installedSkills: standaloneSkillItems.flatMap((item) => item.skill ? [item.skill] : []),
     installedCloudPlugins: Object.values(input.importedCloudPlugins),

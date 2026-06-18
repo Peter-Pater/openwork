@@ -7,7 +7,7 @@ import type {
   Session,
 } from "@opencode-ai/sdk/v2/client";
 import type { createClient } from "./lib/opencode";
-import type { OpencodeConfigFile, WorkspaceInfo } from "./lib/desktop";
+import type { OpencodeConfigFile, WorkspaceInfo } from "./lib/desktop-types";
 
 export type Client = ReturnType<typeof createClient>;
 
@@ -98,6 +98,8 @@ export type ComposerPart =
   | { type: "agent"; name: string }
   | { type: "skill"; name: string }
   | { type: "file"; path: string; label?: string }
+  /** A macOS app targeted via Computer Use (composer "@App" mention). */
+  | { type: "app"; name: string }
   | { type: "paste"; id: string; label: string; text: string; lines: number };
 
 export type ComposerAttachment = {
@@ -296,13 +298,12 @@ export type HubSkillCard = {
   };
 };
 
-/** OpenWork Cloud (Den) org skill surfaced in the Skills catalog (team hub + shared). */
+/** OpenWork Cloud (Den) org skill surfaced in the Skills catalog. */
 export type DenOrgSkillCard = {
   id: string;
   title: string;
   description: string | null;
   skillText: string;
-  hubName: string | null;
   shared: "org" | "public" | null;
   updatedAt: string | null;
 };
@@ -356,7 +357,7 @@ export type McpStatus =
 
 export type McpStatusMap = Record<string, McpStatus>;
 
-export type ReloadReason = "plugins" | "skills" | "mcp" | "config" | "agents" | "commands";
+export type { ReloadReason } from "./extensions";
 
 export type OpencodeConnectStatus = {
   at: number;

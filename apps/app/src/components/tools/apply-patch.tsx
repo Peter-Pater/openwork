@@ -21,9 +21,6 @@ function getApplyPatchToolTitle(part: ApplyPatchToolPart): string | null {
 
 export function ApplyPatchTool({ part }: ApplyPatchToolProps) {
   return (
-    <Tool
-      toolPart={part}
-      title={getApplyPatchToolTitle(part) ?? "apply_patch"}
-    />
+    <Tool toolPart={part} title={getApplyPatchToolTitle(part) ?? undefined} />
   )
 }

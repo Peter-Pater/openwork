@@ -9,7 +9,7 @@ interface GlobToolProps {
 }
 
 function getGlobToolTitle(part: GlobToolPart): string | null {
-  const pattern = part.input.pattern.trim()
+  const pattern = part.input?.pattern?.trim() ?? ""
 
   if (part.state === "output-error") {
     return pattern
@@ -25,7 +25,7 @@ function getGlobToolTitle(part: GlobToolPart): string | null {
 }
 
 function getGlobToolDetail(part: GlobToolPart): string | undefined {
-  const root = part.input.path?.trim()
+  const root = part.input?.path?.trim()
   if (!root) {
     return undefined
   }
@@ -37,11 +37,7 @@ export function GlobTool({ part }: GlobToolProps) {
   return (
     <Tool
       toolPart={part}
-      title={toolDisplayTitle(
-        getGlobToolTitle(part),
-        "glob",
-        getGlobToolDetail(part)
-      )}
+      title={toolDisplayTitle(getGlobToolTitle(part), getGlobToolDetail(part))}
     />
   )
 }

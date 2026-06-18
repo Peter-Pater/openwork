@@ -52,11 +52,7 @@ export function LspTool({ part }: LspToolProps) {
   return (
     <Tool
       toolPart={part}
-      title={toolDisplayTitle(
-        getLspToolTitle(part),
-        "lsp",
-        getLspToolDetail(part)
-      )}
+      title={toolDisplayTitle(getLspToolTitle(part), getLspToolDetail(part))}
     />
   )
 }

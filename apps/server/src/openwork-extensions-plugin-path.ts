@@ -27,3 +27,5 @@ export function openworkPluginPath(name: string, here = dirname(fileURLToPath(im
 
 export const openworkExtensionsPreviewPluginPath = () => openworkPluginPath("openwork-extensions-preview");
 export const openworkCapabilitiesKnowledgePluginPath = () => openworkPluginPath("openwork-capabilities-knowledge");
+export const openworkAnthropicAdaptiveThinkingPluginPath = () => openworkPluginPath("openwork-anthropic-adaptive-thinking");
+export const openworkAnthropicToolSchemaPluginPath = () => openworkPluginPath("openwork-anthropic-tool-schema");

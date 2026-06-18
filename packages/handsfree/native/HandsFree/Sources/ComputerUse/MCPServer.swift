@@ -53,6 +53,8 @@ actor MCPServer {
                 description: "Return target-window screenshot plus compact semantic AX state. Uses strict background activation by default.",
                 properties: [
                     "app": ["type": "string", "description": "Optional running app name. Omit for frontmost app."],
+                    "pid": ["type": "number", "description": "Optional process id. Disambiguates multiple instances of the same app."],
+                    "window_title": ["type": "string", "description": "Optional window title to target a specific window."],
                     "strict": ["type": "boolean", "description": "Keep actions on background-safe AX/postToPid paths. Default true."],
                 ]
             ),
@@ -63,8 +65,10 @@ actor MCPServer {
                     "ref": ["type": "string", "description": "Semantic ref from snapshot, e.g. {e1}."],
                     "snapshot_id": ["type": "string", "description": "Optional snapshot id from the latest snapshot response."],
                     "index": ["type": "number", "description": "Element id or zero-based compatibility index."],
-                    "x": ["type": "number", "description": "Screenshot x coordinate."],
-                    "y": ["type": "number", "description": "Screenshot y coordinate."],
+                    "x": ["type": "number", "description": "Screenshot-image x coordinate (pixels in the snapshot image, e.g. element center.imageX). Not screen pixels."],
+                    "y": ["type": "number", "description": "Screenshot-image y coordinate (pixels in the snapshot image, e.g. element center.imageY). Not screen pixels."],
+                    "screen_x": ["type": "number", "description": "Absolute screen x coordinate (e.g. element center.screenX). Takes precedence over x/y."],
+                    "screen_y": ["type": "number", "description": "Absolute screen y coordinate (e.g. element center.screenY). Takes precedence over x/y."],
                     "click_count": ["type": "number", "description": "1 or 2. Default 1."],
                     "strict": ["type": "boolean", "description": "Override strict mode for this action."],
                 ]
@@ -166,6 +170,8 @@ actor MCPServer {
                     index: intArg(args, "index"),
                     imageX: doubleArg(args, "x"),
                     imageY: doubleArg(args, "y"),
+                    screenX: doubleArg(args, "screen_x"),
+                    screenY: doubleArg(args, "screen_y"),
                     clickCount: intArg(args, "click_count") ?? 1,
                     strict: boolArg(args, "strict")
                 )
@@ -205,7 +211,16 @@ actor MCPServer {
             case "activate_app":
                 return jsonResult(handleActivateApp(args: args))
             case "list_apps":
-                return jsonResult(["ok": true, "apps": runningApps().compactMap(\.localizedName).sorted()])
+                let details = runningApps()
+                    .compactMap { app -> [String: Any]? in
+                        guard let name = app.localizedName else { return nil }
+                        return ["name": name, "pid": Int(app.processIdentifier)]
+                    }
+                return jsonResult([
+                    "ok": true,
+                    "apps": runningApps().compactMap(\.localizedName).sorted(),
+                    "appDetails": details,
+                ])
             case "open_url":
                 return try await jsonResult(handleOpenURL(args: args))
             case "clipboard_read":
@@ -271,7 +286,12 @@ actor MCPServer {
     }
 
     private func snapshotResult(args: [String: Any]) async throws -> [[String: Any]] {
-        let snapshot = try await runtime.snapshot(appName: args["app"] as? String, strict: boolArg(args, "strict"))
+        let snapshot = try await runtime.snapshot(
+            appName: args["app"] as? String,
+            pid: intArg(args, "pid"),
+            windowTitle: args["window_title"] as? String,
+            strict: boolArg(args, "strict")
+        )
         let payload = snapshotPayload(snapshot)
         guard let text = jsonString(payload) else {
             return textResult("Failed to serialize semantic AX snapshot.")

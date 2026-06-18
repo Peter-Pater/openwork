@@ -9,6 +9,7 @@ import {
   MarketplacePluginTable,
   MarketplaceTable,
   MemberTable,
+  OrgSubscriptionTable,
   OrganizationTable,
   PluginAccessGrantTable,
   PluginConfigObjectTable,
@@ -22,6 +23,7 @@ import { db } from "../src/db.js"
 import { ensureDefaultDesktopPolicyForOrganization } from "../src/desktop-policies.js"
 import { env } from "../src/env.js"
 import { seedDefaultOrganizationRoles } from "../src/orgs.js"
+import { calculateOrganizationSeatBillingCounts } from "../src/stripe-billing.js"
 
 const RESET_MODE = process.argv.includes("--reset")
 
@@ -411,6 +413,49 @@ async function ensureTeamMember(teamId: TeamId, orgMembershipId: MemberId) {
   return id
 }
 
+async function ensureDemoSeatSubscription(input: { createdByOrgMembershipId: MemberId; memberCount: number; organizationId: OrganizationId }) {
+  const now = new Date()
+  const currentPeriodEnd = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 30)
+  const quantity = calculateOrganizationSeatBillingCounts({ memberCount: input.memberCount }).chargeable
+  await db.insert(OrgSubscriptionTable).values({
+    cancel_at_period_end: false,
+    canceled_at: null,
+    created_at: now,
+    created_by_org_membership_id: input.createdByOrgMembershipId,
+    current_period_end: currentPeriodEnd,
+    current_period_start: now,
+    ended_at: null,
+    id: createDenTypeId("orgSubscription"),
+    last_event_id: "demo-seed-seat-subscription",
+    organization_id: input.organizationId,
+    quantity,
+    status: "active",
+    stripe_customer_id: `cus_demo_${input.organizationId}`,
+    stripe_price_id: "price_demo_seats",
+    stripe_subscription_id: `sub_demo_seats_${input.organizationId}`,
+    stripe_subscription_item_id: null,
+    type: "seat",
+    updated_at: now,
+  }).onDuplicateKeyUpdate({
+    set: {
+      cancel_at_period_end: false,
+      canceled_at: null,
+      created_by_org_membership_id: input.createdByOrgMembershipId,
+      current_period_end: currentPeriodEnd,
+      current_period_start: now,
+      ended_at: null,
+      last_event_id: "demo-seed-seat-subscription",
+      quantity,
+      status: "active",
+      stripe_customer_id: `cus_demo_${input.organizationId}`,
+      stripe_price_id: "price_demo_seats",
+      stripe_subscription_id: `sub_demo_seats_${input.organizationId}`,
+      stripe_subscription_item_id: null,
+      updated_at: now,
+    },
+  })
+}
+
 async function ensureInvitation(input: {
   email: string
   inviterId: UserId
@@ -451,6 +496,7 @@ async function ensureInvitation(input: {
 async function ensureMarketplace(input: { createdByOrgMembershipId: MemberId; organizationId: OrganizationId }): Promise<MarketplaceId> {
   const name = "Anthropic Knowledge Work Plugins"
   const description = `Demo marketplace seeded from ${GITHUB_REPO}. Plugins are imported into Den DB for local demos; no external integrations are connected.`
+  const logoUrl = "https://cdn.simpleicons.org/anthropic"
   const existing = await db
     .select()
     .from(MarketplaceTable)
@@ -460,7 +506,7 @@ async function ensureMarketplace(input: { createdByOrgMembershipId: MemberId; or
   if (existing[0]) {
     await db
       .update(MarketplaceTable)
-      .set({ createdByOrgMembershipId: input.createdByOrgMembershipId, deletedAt: null, description, status: "active", updatedAt: new Date() })
+      .set({ createdByOrgMembershipId: input.createdByOrgMembershipId, deletedAt: null, description, logoUrl, status: "active", updatedAt: new Date() })
       .where(eq(MarketplaceTable.id, existing[0].id))
     await ensureMarketplaceAccessGrant({ ...input, marketplaceId: existing[0].id, role: "viewer" })
     return existing[0].id
@@ -472,6 +518,7 @@ async function ensureMarketplace(input: { createdByOrgMembershipId: MemberId; or
     deletedAt: null,
     description,
     id,
+    logoUrl,
     name,
     organizationId: input.organizationId,
     status: "active",
@@ -904,6 +951,7 @@ async function resetDemoOrg() {
     await db.delete(MarketplaceAccessGrantTable).where(inArray(MarketplaceAccessGrantTable.marketplaceId, marketplaceIds))
     await db.delete(MarketplaceTable).where(inArray(MarketplaceTable.id, marketplaceIds))
   }
+  await db.delete(OrgSubscriptionTable).where(eq(OrgSubscriptionTable.organization_id, orgId))
   await db.delete(InvitationTable).where(eq(InvitationTable.organizationId, orgId))
   await db.delete(TeamMemberTable).where(inArray(TeamMemberTable.teamId, (await db.select({ id: TeamTable.id }).from(TeamTable).where(eq(TeamTable.organizationId, orgId))).map((r) => r.id)))
   await db.delete(TeamTable).where(eq(TeamTable.organizationId, orgId))
@@ -1022,6 +1070,10 @@ async function main() {
 
   const ownerMembershipId = memberIdsByEmail.get(DEMO_OWNER_EMAIL.toLowerCase())
   if (!ownerMembershipId) throw new Error("Demo owner membership missing after seed.")
+
+  await ensureDemoSeatSubscription({ createdByOrgMembershipId: ownerMembershipId, memberCount: memberIdsByEmail.size, organizationId })
+  log("✓", "active demo seat subscription")
+  console.log()
 
   log("…", "creating marketplace")
   const marketplaceId = await ensureMarketplace({ createdByOrgMembershipId: ownerMembershipId, organizationId })

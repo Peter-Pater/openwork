@@ -32,17 +32,18 @@ actor ComputerUseRuntime {
         )
     }
 
-    func snapshot(appName: String?, strict requestedStrict: Bool?) async throws -> AppSnapshot {
+    func snapshot(appName: String?, pid: Int? = nil, windowTitle: String? = nil, strict requestedStrict: Bool?) async throws -> AppSnapshot {
         let effectiveStrict = requestedStrict ?? strictMode
         if !effectiveStrict {
             resetBackgroundActivation()
         }
 
-        var target = try accessibility.resolveTarget(appName: appName)
+        let requestedPID = pid.map(pid_t.init)
+        var target = try accessibility.resolveTarget(appName: appName, pid: requestedPID, windowTitle: windowTitle)
         let backgroundActivated: Bool
         if effectiveStrict, !target.isFrontmost {
             backgroundActivated = try await ensureBackgroundActivation(target: target)
-            target = try accessibility.resolveTarget(appName: appName)
+            target = try accessibility.resolveTarget(appName: appName, pid: requestedPID, windowTitle: windowTitle)
         } else {
             backgroundActivated = false
         }
@@ -58,7 +59,7 @@ actor ComputerUseRuntime {
         return annotatedSnapshot
     }
 
-    func click(snapshotID: String?, ref: String?, index: Int?, imageX: Double?, imageY: Double?, clickCount: Int, strict requestedStrict: Bool?) async throws -> ActionMetadata {
+    func click(snapshotID: String?, ref: String?, index: Int?, imageX: Double?, imageY: Double?, screenX: Double? = nil, screenY: Double? = nil, clickCount: Int, strict requestedStrict: Bool?) async throws -> ActionMetadata {
         let snapshot = try requireSnapshot(snapshotID: snapshotID)
         let effectiveStrict = requestedStrict ?? snapshot.strictMode
         try validateSnapshotForAction(snapshot: snapshot, strict: effectiveStrict)
@@ -76,6 +77,10 @@ actor ComputerUseRuntime {
                 return try await clickPoint(fresh.semantic.frame.center, clickCount: clickCount, strict: effectiveStrict, fallbackUsed: true)
             }
             return try await clickPoint(record.semantic.frame.center, clickCount: clickCount, strict: effectiveStrict, fallbackUsed: true)
+        }
+
+        if let screenX, let screenY {
+            return try await clickPoint(CGPoint(x: screenX, y: screenY), clickCount: clickCount, strict: effectiveStrict, fallbackUsed: false)
         }
 
         if let imageX, let imageY {
@@ -148,8 +153,32 @@ actor ComputerUseRuntime {
             throw ComputerUseError.staleSnapshot("The target element changed. Take a new snapshot before setting its value.")
         }
         AgentCursorOverlay.shared.show(at: fresh.semantic.frame.center)
-        let ok = accessibility.setValue(record: fresh, value: value)
-        return recordAction(ActionMetadata(ok: ok, path: .accessibility, strictMode: snapshot.strictMode, backgroundSafe: true, fallbackUsed: false, message: ok ? "Set \(fresh.semantic.ref) via AXValue." : "Element value is not settable."))
+        let axWriteAccepted = accessibility.setValue(record: fresh, value: value)
+        if axWriteAccepted, valueMatches(record: fresh, expected: value) {
+            return recordAction(ActionMetadata(ok: true, path: .accessibility, strictMode: snapshot.strictMode, backgroundSafe: true, fallbackUsed: false, message: "Set \(fresh.semantic.ref) via AXValue."))
+        }
+
+        // Web inputs (Chromium/Electron) accept AXValue writes without applying
+        // them. Fall back to focus + select-all + retype, then verify.
+        _ = accessibility.focus(record: fresh)
+        try BackgroundInputDispatcher.pressKey(pid: snapshot.pid, combo: "command+a")
+        try BackgroundInputDispatcher.typeText(pid: snapshot.pid, text: value)
+        Thread.sleep(forTimeInterval: 0.08)
+        let verified = valueMatches(record: fresh, expected: value)
+        return recordAction(ActionMetadata(
+            ok: verified,
+            path: .backgroundCGEvent,
+            strictMode: snapshot.strictMode,
+            backgroundSafe: true,
+            fallbackUsed: true,
+            message: verified
+                ? "AXValue write did not stick; set \(fresh.semantic.ref) via select-all + retype fallback."
+                : "Could not verify the value of \(fresh.semantic.ref) after AXValue and retype fallback."
+        ))
+    }
+
+    private func valueMatches(record: AXElementRecord, expected: String) -> Bool {
+        accessibility.value(record: record) == expected
     }
 
     func performAction(snapshotID: String?, ref: String?, index: Int?, action: String) throws -> ActionMetadata {
@@ -291,7 +320,7 @@ actor ComputerUseRuntime {
     }
 
     private func freshRecord(matching record: AXElementRecord, in snapshot: AppSnapshot) -> AXElementRecord? {
-        guard let target = try? accessibility.resolveTarget(appName: snapshot.appName, windowTitle: snapshot.windowTitle) else {
+        guard let target = try? accessibility.resolveTarget(appName: snapshot.appName, pid: snapshot.pid, windowTitle: snapshot.windowTitle) else {
             return nil
         }
         let records = accessibility.records(target: target)

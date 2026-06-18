@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "cross-env OPENWORK_DEV_MODE=1 OPENWORK_ELECTRON_REMOTE_DEBUG_PORT=9823 pnpm --filter @openwork/desktop dev",
     "dev:electron": "cross-env OPENWORK_DEV_MODE=1 pnpm --filter @openwork/desktop dev:electron",
+    "dev:electron:two": "cross-env OPENWORK_DEV_MODE=1 node scripts/dev-two-electron-demo.mjs",
     "dev:sandbox": "bash .devcontainer/dev-sandbox.sh",
     "dev:windows": ".\\scripts\\dev-windows.cmd",
     "dev:windows:x64": ".\\scripts\\dev-windows.cmd x64",
@@ -40,6 +41,7 @@
     "test:session-switch": "pnpm --filter @openwork/app test:session-switch",
     "test:fs-engine": "pnpm --filter @openwork/app test:fs-engine",
     "test:e2e": "pnpm --filter @openwork/app test:e2e",
+    "evals": "node evals/runner/run.mjs",
     "test:orchestrator": "pnpm --filter openwork-orchestrator test:router",
     "bump:patch": "pnpm --filter @openwork/app bump:patch",
     "bump:minor": "pnpm --filter @openwork/app bump:minor",

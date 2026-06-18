@@ -10,9 +10,10 @@
   },
   "scripts": {
     "check": "pnpm run check:js && pnpm run check:native",
-    "check:js": "node --check bin/openwork-handsfree-computer-use.mjs && node --check src/cua-runner.mjs && node --check src/realtime-tools.mjs",
+    "check:js": "node --check bin/openwork-handsfree-computer-use.mjs && node --check src/cua-runner.mjs && node --check src/realtime-tools.mjs && node --check test/e2e/run.mjs",
     "build:native": "swift build --package-path native/HandsFree -c release --product HandsFreeComputerUse",
-    "check:native": "swift build --package-path native/HandsFree --product HandsFreeComputerUse"
+    "check:native": "swift build --package-path native/HandsFree --product HandsFreeComputerUse",
+    "test:e2e": "node test/e2e/run.mjs"
   },
   "files": [
     "bin",

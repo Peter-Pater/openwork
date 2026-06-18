@@ -9,6 +9,12 @@ import {
   type McpDirectoryInfo,
 } from "../../../app/constants";
 import { extensionResource } from "../../../app/extensions";
+import {
+  isLegacyWebAppMcpUrl,
+  mintCloudControlMcpToken,
+  readDenSettings,
+  resolveCloudMcpResourceUrl,
+} from "../../../app/lib/den";
 import { createClient, unwrap } from "../../../app/lib/opencode";
 import { finishPerf, perfNow, recordPerfLog } from "../../../app/lib/perf-log";
 import {
@@ -35,6 +41,40 @@ import { isDesktopRuntime, normalizeDirectoryPath, safeStringify } from "../../.
 import type { OpenworkServerStore } from "./openwork-server-store";
 
 type SetStateAction<T> = T | ((current: T) => T);
+
+const CLOUD_MCP_SYNC_MARKER_KEY = "openwork.den.mcp.sync";
+const CLOUD_MCP_REFRESH_MARGIN_MS = 7 * 24 * 60 * 60 * 1000;
+
+type CloudMcpSyncMarker = { orgId: string; expiresAt: string };
+
+function readCloudMcpSyncMarker(): CloudMcpSyncMarker | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CLOUD_MCP_SYNC_MARKER_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { orgId?: unknown }).orgId === "string" &&
+      typeof (parsed as { expiresAt?: unknown }).expiresAt === "string"
+    ) {
+      return parsed as CloudMcpSyncMarker;
+    }
+  } catch {
+    // Corrupt marker — treat as absent.
+  }
+  return null;
+}
+
+function writeCloudMcpSyncMarker(marker: CloudMcpSyncMarker) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CLOUD_MCP_SYNC_MARKER_KEY, JSON.stringify(marker));
+  } catch {
+    // Storage unavailable — sync will simply re-run next time.
+  }
+}
 
 export type ConnectionsStoreSnapshot = {
   mcpServers: McpServerEntry[];
@@ -277,6 +317,7 @@ export function createConnectionsStore(options: {
       config: entry.config as McpServerEntry["config"],
       source: entry.source,
     }));
+    const engineSync = response.engineSync ?? null;
 
     let nextStatuses: McpStatusMap = {};
     const activeClient = options.client();
@@ -293,12 +334,13 @@ export function createConnectionsStore(options: {
       count: next.length,
       names: next.map((entry) => entry.name),
       sources: next.map((entry) => entry.source ?? "unknown"),
+      engineSyncStatus: engineSync?.status ?? null,
     });
 
-    return { next, nextStatuses };
+    return { next, nextStatuses, engineSync };
   };
 
-  const resolveDesktopCommand = async (commandName: string, fallbackOnError = true) => {
+  const resolveDesktopCommand = async (commandName: "getComputerUseMcpCommand" | "getOpenworkUiMcpCommand", fallbackOnError = true) => {
     try {
       const command = await window.__OPENWORK_ELECTRON__?.invokeDesktop?.(commandName);
       if (Array.isArray(command) && command.every((part) => typeof part === "string") && command.length > 0) {
@@ -331,7 +373,7 @@ export function createConnectionsStore(options: {
   const resolveLocalMcpEnvironment = async (entry: McpDirectoryInfo) => {
     if (entry.serverName !== "openwork-ui") return undefined;
     try {
-      const environment = await (window as any).__OPENWORK_ELECTRON__?.invokeDesktop?.("getOpenworkUiMcpEnvironment");
+      const environment = await window.__OPENWORK_ELECTRON__?.invokeDesktop?.("getOpenworkUiMcpEnvironment");
       if (environment && typeof environment === "object" && !Array.isArray(environment)) {
         return Object.fromEntries(
           Object.entries(environment).filter((entry): entry is [string, string] =>
@@ -355,12 +397,19 @@ export function createConnectionsStore(options: {
       setStateField("mcpStatus", null);
       const serverResult = await listMcpFromOpenworkServer(projectDir);
       if (serverResult) {
+        // Surface engine registration failures instead of leaving users
+        // staring at an MCP that silently shows as disconnected.
+        const failedNames = serverResult.engineSync?.status === "failed"
+          ? serverResult.engineSync.failures.map((failure) => failure.name).join(", ")
+          : "";
         mutateState((current) => ({
           ...current,
           mcpServers: serverResult.next,
           mcpLastUpdatedAt: Date.now(),
           mcpStatuses: serverResult.nextStatuses,
-          mcpStatus: serverResult.next.length ? null : "No MCP servers configured yet.",
+          mcpStatus: failedNames
+            ? `Some MCPs could not be registered with the engine: ${failedNames}. They may appear disconnected — try reloading the engine.`
+            : serverResult.next.length ? null : "No MCP servers configured yet.",
         }));
         return;
       }
@@ -429,10 +478,19 @@ export function createConnectionsStore(options: {
         ? parseMcpServersFromContent(projectConfig.content)
         : [];
       const projectNames = new Set(projectServers.map((entry) => entry.name));
-      const next = [
+      const fileServers = [
         ...globalServers.filter((entry) => !projectNames.has(entry.name)),
         ...projectServers,
       ];
+      // Runtime-DB MCPs (source "config.remote") only exist on the OpenWork
+      // server. Keep the last-known entries instead of silently dropping them
+      // while the server is briefly unreachable (startup race) — otherwise
+      // enabled MCPs like openwork-ui render as "off".
+      const fileNames = new Set(fileServers.map((entry) => entry.name));
+      const runtimeServers = state.mcpServers.filter(
+        (entry) => entry.source === "config.remote" && !fileNames.has(entry.name),
+      );
+      const next = [...fileServers, ...runtimeServers];
 
       recordPerfLog(options.developerMode(), "mcp.refresh", "desktop-project-fallback-result", {
         globalConfigPath: globalConfig.path,
@@ -442,7 +500,7 @@ export function createConnectionsStore(options: {
         sources: next.map((entry) => entry.source ?? "unknown"),
       });
 
-      if (!globalConfig.exists && !projectConfig.exists) {
+      if (!globalConfig.exists && !projectConfig.exists && runtimeServers.length === 0) {
         mutateState((current) => ({
           ...current,
           mcpServers: [],
@@ -480,7 +538,7 @@ export function createConnectionsStore(options: {
     }
   }
 
-  async function connectMcp(entry: McpDirectoryInfo) {
+  async function connectMcp(entry: McpDirectoryInfo): Promise<boolean> {
     const startedAt = perfNow();
     const openworkSnapshot = getOpenworkSnapshot();
     const isRemoteWorkspace =
@@ -504,7 +562,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "openwork-server-unavailable",
       });
-      return;
+      return false;
     }
 
     if (hasOpenworkTarget && !canUseOpenworkServer) {
@@ -512,7 +570,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "openwork-server-read-only",
       });
-      return;
+      return false;
     }
 
     if (!canUseOpenworkServer && !isDesktopRuntime()) {
@@ -520,7 +578,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "desktop-required",
       });
-      return;
+      return false;
     }
 
     if (!isRemoteWorkspace && !projectDir && !canUseOpenworkServer) {
@@ -528,7 +586,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "missing-workspace",
       });
-      return;
+      return false;
     }
 
     const activeClient = canUseOpenworkServer ? options.client() ?? await ensureActiveClient().catch(() => null) : await ensureActiveClient();
@@ -537,7 +595,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "no-active-client",
       });
-      return;
+      return false;
     }
 
     const resolvedProjectDir = activeClient ? await resolveProjectDir(activeClient, projectDir) : projectDir;
@@ -546,7 +604,7 @@ export function createConnectionsStore(options: {
       finishPerf(options.developerMode(), "mcp.connect", "blocked", startedAt, {
         reason: "missing-workspace-after-discovery",
       });
-      return;
+      return false;
     }
 
     const slug = entry.id ?? getMcpServerName(entry);
@@ -560,7 +618,7 @@ export function createConnectionsStore(options: {
       let resolvedHeaders: Record<string, string> | undefined;
       if (!resolvedUrl && entry.serverName === "openwork-ui") {
         try {
-          const bridgeInfo = await (window as any).__OPENWORK_ELECTRON__?.invokeDesktop?.("getUiControlBridgeInfo");
+          const bridgeInfo = await window.__OPENWORK_ELECTRON__?.invokeDesktop?.("getUiControlBridgeInfo");
           if (bridgeInfo?.baseUrl) {
             resolvedUrl = `${bridgeInfo.baseUrl}/mcp`;
             if (bridgeInfo.token) {
@@ -569,6 +627,29 @@ export function createConnectionsStore(options: {
           }
         } catch {
           // Bridge not available
+        }
+      }
+
+      // Signed-in cloud users connect the Den MCPs with a first-party token —
+      // no browser OAuth round-trip. Signed-out users fall back to OAuth.
+      // The same minted token works for both /mcp (openwork-cloud) and
+      // /mcp/admin (openwork-admin); den-api enforces the platform-admin
+      // allowlist on the admin endpoint server-side.
+      if (entry.serverName === "openwork-cloud" || entry.serverName === "openwork-admin") {
+        try {
+          const minted = await mintCloudControlMcpToken();
+          if (minted) {
+            if (entry.serverName === "openwork-cloud") {
+              // Never trust `minted.resource` verbatim: older den-api builds
+              // mint the bare web-app origin (https://app.openworklabs.com/mcp)
+              // where MCP 404s. Heal it, falling back to the entry's
+              // bootstrap-derived URL.
+              resolvedUrl = resolveCloudMcpResourceUrl(minted.resource) ?? resolvedUrl;
+            }
+            resolvedHeaders = { Authorization: `Bearer ${minted.token}` };
+          }
+        } catch {
+          // Minting failed (offline, expired session) — fall back to OAuth.
         }
       }
 
@@ -584,9 +665,16 @@ export function createConnectionsStore(options: {
         mcpEntryConfig["url"] = resolvedUrl;
         if (resolvedHeaders) {
           mcpEntryConfig["headers"] = resolvedHeaders;
+          // Header-authed entries must not trigger OAuth auto-detection;
+          // otherwise opencode reports "needs_auth" despite valid headers.
+          mcpEntryConfig["oauth"] = false;
         }
-        if (entry.oauth && !resolvedHeaders) {
-          mcpEntryConfig["oauth"] = {};
+        if (!resolvedHeaders) {
+          if (entry.oauthConfig) {
+            mcpEntryConfig["oauth"] = entry.oauthConfig;
+          } else if (entry.oauth) {
+            mcpEntryConfig["oauth"] = {};
+          }
         }
       }
 
@@ -662,9 +750,11 @@ export function createConnectionsStore(options: {
           entryType === "remote"
             ? {
                 type: "remote" as const,
-                url: entry.url!,
+                url: resolvedUrl ?? entry.url!,
                 enabled: true,
-                ...(entry.oauth ? { oauth: {} } : {}),
+                ...(resolvedHeaders ? { headers: resolvedHeaders, oauth: false as const } : {}),
+                ...(!resolvedHeaders && entry.oauthConfig ? { oauth: entry.oauthConfig } : {}),
+                ...(!resolvedHeaders && !entry.oauthConfig && entry.oauth ? { oauth: {} } : {}),
               }
             : {
                 type: "local" as const,
@@ -685,7 +775,25 @@ export function createConnectionsStore(options: {
       options.markReloadRequired?.("mcp", { type: "mcp", name: slug, action });
       await refreshMcpServers();
 
-      if (entry.oauth) {
+      // OAuth is auto-detected: open the sign-in modal when the directory
+      // entry declares OAuth up front, or when the engine reports the fresh
+      // remote entry as needing auth. Custom apps no longer ask the user to
+      // know whether their server uses OAuth.
+      let needsAuth = Boolean(entry.oauth) && !resolvedHeaders;
+      if (!needsAuth && entryType === "remote" && !resolvedHeaders) {
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const detected = snapshot.mcpStatuses[slug]?.status;
+          if (detected === "needs_auth" || detected === "needs_client_registration") {
+            needsAuth = true;
+            break;
+          }
+          if (detected === "connected" || detected === "failed" || detected === "disabled") break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          await refreshMcpServers();
+        }
+      }
+
+      if (needsAuth) {
         mutateState((current) => ({
           ...current,
           mcpAuthEntry: entry,
@@ -702,7 +810,9 @@ export function createConnectionsStore(options: {
         type: entryType,
         slug,
       });
+      return true;
     } catch (error) {
+      console.error("[mcp.connect] failed", entry.name, error);
       setStateField(
         "mcpStatus",
         error instanceof Error ? error.message : t("mcp.connect_failed"),
@@ -712,9 +822,86 @@ export function createConnectionsStore(options: {
         type: entryType,
         error: error instanceof Error ? error.message : safeStringify(error),
       });
+      return false;
     } finally {
       setStateField("mcpConnectingName", null);
     }
+  }
+
+  // Guards the unhealthy-status self-heal in syncCloudControlMcp: each
+  // re-mint writes a new token to config, which marks an engine reload as
+  // required. Until that reload happens the status stays needs_auth, so
+  // retrying on every sync tick produced an endless "MCP 'openwork-cloud'
+  // was updated. Reload to connect." nag. One attempt per unhealthy episode;
+  // reset when the entry reports connected again.
+  let cloudMcpUnhealthyRemintAttempted = false;
+
+  /**
+   * Background reconciliation for the Den cloud MCP: when the desktop is
+   * signed in to OpenWork Cloud with an active org, keep the
+   * `openwork-cloud` MCP entry configured with a fresh first-party token.
+   * Quiet by design — a failed mint never opens the OAuth modal.
+   */
+  async function syncCloudControlMcp(): Promise<"synced" | "unchanged" | "skipped"> {
+    const settings = readDenSettings();
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    if (!orgId || !settings.authToken?.trim()) return "skipped";
+
+    const entry = MCP_QUICK_CONNECT.find((candidate) => candidate.serverName === "openwork-cloud");
+    if (!entry) return "skipped";
+    const slug = entry.id ?? getMcpServerName(entry);
+
+    const marker = readCloudMcpSyncMarker();
+    const markerFresh =
+      marker !== null &&
+      marker.orgId === orgId &&
+      new Date(marker.expiresAt).getTime() - Date.now() > CLOUD_MCP_REFRESH_MARGIN_MS;
+
+    // A revoked/expired token surfaces as needs_auth or failed from opencode;
+    // while signed in, that means re-mint instead of standing pat — but only
+    // once per unhealthy episode (see cloudMcpUnhealthyRemintAttempted).
+    const entryStatus = snapshot.mcpStatuses[slug]?.status;
+    if (entryStatus === "connected") {
+      cloudMcpUnhealthyRemintAttempted = false;
+    }
+    const entryUnhealthy = entryStatus === "needs_auth" || entryStatus === "failed";
+    const shouldRemintForHealth = entryUnhealthy && !cloudMcpUnhealthyRemintAttempted;
+
+    // Builds before #2116's follow-up wrote the MCP URL against the bare
+    // web-app origin (https://app.openworklabs.com/mcp), which 404s.
+    // Reconfigure those entries even when the marker is still fresh.
+    const configuredEntry = snapshot.mcpServers.find((server) => server.name === slug);
+    const hasLegacyUrl =
+      configuredEntry?.config.type === "remote" && isLegacyWebAppMcpUrl(configuredEntry.config.url);
+
+    // The marker is the source of truth for "configured recently". Do NOT
+    // gate this on snapshot.mcpServers: the store is recreated on every
+    // settings mount with an empty (or refresh-errored) server list, and
+    // treating that as "not configured" re-minted a token and rewrote config
+    // on every visit — endless "Reload to connect" toasts. If a user
+    // manually removed the entry, we respect that until the marker expires
+    // instead of silently re-adding it.
+    if (markerFresh && !shouldRemintForHealth && !hasLegacyUrl) {
+      return "unchanged";
+    }
+    if (shouldRemintForHealth) {
+      cloudMcpUnhealthyRemintAttempted = true;
+    }
+
+    // Validate the session up front so a failed mint never reaches
+    // connectMcp's signed-out fallback (which opens the OAuth modal).
+    const minted = await mintCloudControlMcpToken().catch(() => null);
+    if (!minted) return "skipped";
+
+    // Trust connectMcp's own result. Judging success via snapshot.mcpServers
+    // broke whenever the post-connect refresh errored: the marker was never
+    // written, so every subsequent tick re-minted and re-wrote config.
+    const connected = await connectMcp(entry);
+    if (!connected) {
+      return "skipped";
+    }
+    writeCloudMcpSyncMarker({ orgId, expiresAt: minted.expiresAt });
+    return "synced";
   }
 
   function authorizeMcp(entry: McpServerEntry) {
@@ -1006,6 +1193,7 @@ export function createConnectionsStore(options: {
     readMcpConfigFile,
     refreshMcpServers,
     connectMcp,
+    syncCloudControlMcp,
     authorizeMcp,
     logoutMcpAuth,
     removeMcp,

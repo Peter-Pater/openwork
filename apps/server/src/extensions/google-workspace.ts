@@ -30,6 +30,25 @@ const GOOGLE_WORKSPACE_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/gmail.readonly",
 ];
+const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const DRIVE_FULL_SCOPE = "https://www.googleapis.com/auth/drive";
+const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const CHAT_SPACES_SCOPE = "https://www.googleapis.com/auth/chat.spaces.readonly";
+const CHAT_MESSAGES_READ_SCOPE = "https://www.googleapis.com/auth/chat.messages.readonly";
+const CHAT_MESSAGES_CREATE_SCOPE = "https://www.googleapis.com/auth/chat.messages.create";
+
+export const GOOGLE_WORKSPACE_OPTIONAL_FEATURES = {
+  gmailRead: [GMAIL_READONLY_SCOPE],
+  driveFull: [DRIVE_FULL_SCOPE],
+  calendarWrite: [CALENDAR_EVENTS_SCOPE],
+  chat: [CHAT_SPACES_SCOPE, CHAT_MESSAGES_READ_SCOPE, CHAT_MESSAGES_CREATE_SCOPE],
+} satisfies Record<string, string[]>;
+
+export type GoogleWorkspaceOptionalFeature = keyof typeof GOOGLE_WORKSPACE_OPTIONAL_FEATURES;
+
+function isGoogleWorkspaceOptionalFeature(value: string): value is GoogleWorkspaceOptionalFeature {
+  return Object.hasOwn(GOOGLE_WORKSPACE_OPTIONAL_FEATURES, value);
+}
 
 export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
   {
@@ -75,9 +94,37 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
   },
   {
     extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_list_messages",
+    title: "List Gmail messages",
+    description: "List recent Gmail messages for the connected account. Requires Gmail read access (gmail.readonly scope).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional Gmail search query, e.g. 'is:unread' or 'from:someone@example.com'." },
+        maxResults: { type: "number", description: "Maximum messages to return." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "gmail_get_message",
+    title: "Read Gmail message",
+    description: "Read a Gmail message by id, including its plain text body. Requires Gmail read access (gmail.readonly scope).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        messageId: { type: "string", description: "Gmail message id." },
+      },
+      required: ["messageId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
     action: "drive_search_files",
     title: "Search Drive files",
-    description: "Search files available to OpenWork through the connected Google Drive scope.",
+    description: "Search files available to OpenWork through the connected Google Drive scope. With full Drive access enabled, this searches the entire Drive.",
     inputSchema: {
       type: "object",
       properties: {
@@ -118,6 +165,21 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
   },
   {
     extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "drive_update_file",
+    title: "Update Drive file",
+    description: "Replace the plain text content of a Drive file available to OpenWork by file id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "Google Drive file id." },
+        content: { type: "string", description: "New plain text content for the file." },
+      },
+      required: ["fileId", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
     action: "docs_read_document",
     title: "Read Google Doc",
     description: "Read the structure and text content of a Google Docs document by ID.",
@@ -127,6 +189,26 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         documentId: { type: "string", description: "The Google Docs document ID." },
       },
       required: ["documentId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "calendar_create_event",
+    title: "Create calendar event",
+    description: "Create an event on the connected Google Calendar. Requires calendar editing access (calendar.events scope).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "Event title." },
+        description: { type: "string", description: "Optional event description." },
+        location: { type: "string", description: "Optional event location." },
+        start: { type: "string", description: "Event start as ISO datetime." },
+        end: { type: "string", description: "Event end as ISO datetime." },
+        timeZone: { type: "string", description: "Optional IANA time zone, e.g. 'Europe/Paris'." },
+        attendees: { type: "array", items: { type: "string" }, description: "Optional attendee email addresses." },
+      },
+      required: ["summary", "start", "end"],
       additionalProperties: false,
     },
   },
@@ -146,6 +228,19 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         },
       },
       required: ["documentId", "requests"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "chat_list_spaces",
+    title: "List Google Chat spaces",
+    description: "List Google Chat spaces for the connected account. Requires Google Chat access.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        maxResults: { type: "number", description: "Maximum spaces to return." },
+      },
       additionalProperties: false,
     },
   },
@@ -280,29 +375,16 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
   },
   {
     extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
-    action: "gmail_list_messages",
-    title: "List Gmail Messages",
-    description: "List email messages in the user's mailbox with optional search filter q.",
+    action: "chat_list_messages",
+    title: "List Google Chat messages",
+    description: "List recent messages in a Google Chat space. Requires Google Chat access.",
     inputSchema: {
       type: "object",
       properties: {
-        q: { type: "string", description: "Query string for filtering messages (e.g. 'from:somebody@example.com')." },
+        spaceId: { type: "string", description: "Chat space id or resource name, e.g. 'spaces/AAAA1234'." },
         maxResults: { type: "number", description: "Maximum messages to return." },
       },
-      additionalProperties: false,
-    },
-  },
-  {
-    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
-    action: "gmail_get_message",
-    title: "Get Gmail Message Details",
-    description: "Retrieve details of a specific email message by ID.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "The Gmail message ID." },
-      },
-      required: ["id"],
+      required: ["spaceId"],
       additionalProperties: false,
     },
   },
@@ -331,6 +413,21 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         id: { type: "string", description: "The Gmail thread ID." },
       },
       required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    extensionId: GOOGLE_WORKSPACE_EXTENSION_ID,
+    action: "chat_send_message",
+    title: "Send Google Chat message",
+    description: "Send a text message to a Google Chat space. Requires Google Chat access.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        spaceId: { type: "string", description: "Chat space id or resource name, e.g. 'spaces/AAAA1234'." },
+        text: { type: "string", description: "Message text." },
+      },
+      required: ["spaceId", "text"],
       additionalProperties: false,
     },
   },
@@ -370,7 +467,8 @@ function googleWorkspaceCredentials() {
   const missing: string[] = [];
   if (!clientId) missing.push(GOOGLE_WORKSPACE_CLIENT_ID_ENV);
   if (!clientSecret && !tokenBrokerUrl) missing.push(GOOGLE_WORKSPACE_CLIENT_SECRET_ENV);
-  return { clientId, clientSecret, tokenBrokerUrl, missing };
+  const customClient = clientId !== GOOGLE_WORKSPACE_DESKTOP_CLIENT_ID;
+  return { clientId, clientSecret, tokenBrokerUrl, missing, customClient };
 }
 
 function googleWorkspaceDir(config: ServerConfig): string {
@@ -549,6 +647,7 @@ function googleWorkspaceStatusPayload(record: Record<string, unknown> | null = n
   return {
     configured: credentials.missing.length === 0,
     missing: credentials.missing,
+    customClient: credentials.customClient,
     vault: googleWorkspaceVaultMode(),
     connected: googleWorkspaceAccountRecords(record).length > 0,
     account: googleWorkspaceSafeAccount(primary?.account),
@@ -705,6 +804,96 @@ function gmailRawMessage(input: { to: string[]; cc?: string[]; bcc?: string[]; s
     "",
     input.body,
   ].filter((line): line is string => typeof line === "string").join("\r\n");
+}
+
+function requireScope(record: Record<string, unknown>, scope: string, code: string, message: string) {
+  const scopes = Array.isArray(record.scopes) ? record.scopes : [];
+  if (!scopes.includes(scope)) throw new ApiError(403, code, message);
+}
+
+function requireGmailReadScope(record: Record<string, unknown>) {
+  requireScope(record, GMAIL_READONLY_SCOPE, "google_gmail_read_not_granted", "Gmail read access is not granted for this account. Reconnect Google Workspace with Gmail read access enabled.");
+}
+
+function requireCalendarWriteScope(record: Record<string, unknown>) {
+  requireScope(record, CALENDAR_EVENTS_SCOPE, "google_calendar_write_not_granted", "Calendar editing access is not granted for this account. Reconnect Google Workspace with calendar editing enabled.");
+}
+
+function requireChatScope(record: Record<string, unknown>, scope: string) {
+  requireScope(record, scope, "google_chat_not_granted", "Google Chat access is not granted for this account. Reconnect Google Workspace with Google Chat enabled.");
+}
+
+function gmailHeader(payload: unknown, name: string): string {
+  if (!isRecord(payload) || !Array.isArray(payload.headers)) return "";
+  const header = payload.headers.filter(isRecord).find((entry) => typeof entry.name === "string" && entry.name.toLowerCase() === name.toLowerCase());
+  return header && typeof header.value === "string" ? header.value : "";
+}
+
+function gmailMessageSummary(message: unknown) {
+  if (!isRecord(message)) return null;
+  return {
+    id: typeof message.id === "string" ? message.id : null,
+    threadId: typeof message.threadId === "string" ? message.threadId : null,
+    snippet: typeof message.snippet === "string" ? message.snippet : null,
+    labelIds: Array.isArray(message.labelIds) ? message.labelIds.filter((item): item is string => typeof item === "string") : [],
+    subject: gmailHeader(message.payload, "Subject"),
+    from: gmailHeader(message.payload, "From"),
+    to: gmailHeader(message.payload, "To"),
+    date: gmailHeader(message.payload, "Date"),
+  };
+}
+
+function decodeGmailBody(data: string): string {
+  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+
+function gmailMessageText(payload: unknown, mimePrefix = "text/plain"): string {
+  if (!isRecord(payload)) return "";
+  const mimeType = typeof payload.mimeType === "string" ? payload.mimeType : "";
+  const data = isRecord(payload.body) && typeof payload.body.data === "string" ? payload.body.data : "";
+  if (mimeType.startsWith(mimePrefix) && data) return decodeGmailBody(data);
+  const parts = Array.isArray(payload.parts) ? payload.parts : [];
+  for (const part of parts) {
+    const text = gmailMessageText(part, mimePrefix);
+    if (text) return text;
+  }
+  return "";
+}
+
+async function googleWorkspaceListMessages(config: ServerConfig, args: Record<string, unknown>) {
+  const query = readStringField(args, "query");
+  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10), 1), 50);
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireGmailReadScope(record);
+  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+  if (query) url.searchParams.set("q", query);
+  url.searchParams.set("maxResults", String(maxResults));
+  const list = await fetchGoogleJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+  const ids = isRecord(list) && Array.isArray(list.messages)
+    ? list.messages.filter(isRecord).map((entry) => typeof entry.id === "string" ? entry.id : "").filter(Boolean)
+    : [];
+  const messages = await Promise.all(ids.map(async (id) => {
+    const message = await fetchGoogleJson(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    return gmailMessageSummary(message);
+  }));
+  return { messages, resultSizeEstimate: isRecord(list) && typeof list.resultSizeEstimate === "number" ? list.resultSizeEstimate : null };
+}
+
+async function googleWorkspaceGetMessage(config: ServerConfig, args: Record<string, unknown>) {
+  const messageId = readStringField(args, "messageId");
+  if (!messageId) throw new ApiError(400, "invalid_payload", "messageId is required");
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireGmailReadScope(record);
+  const message = await fetchGoogleJson(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const payload = isRecord(message) ? message.payload : null;
+  const body = gmailMessageText(payload) || gmailMessageText(payload, "text/html");
+  return { ...gmailMessageSummary(message), body };
 }
 
 async function googleWorkspaceListEvents(config: ServerConfig, args: Record<string, unknown>) {
@@ -924,27 +1113,6 @@ async function googleWorkspaceUpdateSpreadsheet(config: ServerConfig, args: Reco
   });
 }
 
-async function googleWorkspaceListMessages(config: ServerConfig, args: Record<string, unknown>) {
-  const q = readStringField(args, "q");
-  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10), 1), 100);
-  const { accessToken } = await googleWorkspaceAccessToken(config);
-  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  if (q) url.searchParams.set("q", q);
-  url.searchParams.set("maxResults", String(maxResults));
-  return fetchGoogleJson(url.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-}
-
-async function googleWorkspaceGetMessage(config: ServerConfig, args: Record<string, unknown>) {
-  const id = readStringField(args, "id");
-  if (!id) throw new ApiError(400, "invalid_payload", "id is required");
-  const { accessToken } = await googleWorkspaceAccessToken(config);
-  return fetchGoogleJson(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-}
-
 async function googleWorkspaceListThreads(config: ServerConfig, args: Record<string, unknown>) {
   const q = readStringField(args, "q");
   const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10), 1), 100);
@@ -975,6 +1143,82 @@ export async function googleWorkspaceListFiles(config: ServerConfig) {
   return fetchGoogleJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
 }
 
+async function googleWorkspaceUpdateFile(config: ServerConfig, args: Record<string, unknown>) {
+  const fileId = readStringField(args, "fileId");
+  const content = typeof args.content === "string" ? args.content : "";
+  if (!fileId || !content) throw new ApiError(400, "invalid_payload", "fileId and content are required");
+  const { accessToken } = await googleWorkspaceAccessToken(config);
+  return fetchGoogleJson(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,name,mimeType,webViewLink,modifiedTime`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "text/plain; charset=UTF-8" },
+    body: content,
+  });
+}
+
+async function googleWorkspaceCreateEvent(config: ServerConfig, args: Record<string, unknown>) {
+  const summary = readStringField(args, "summary");
+  const start = readStringField(args, "start");
+  const end = readStringField(args, "end");
+  if (!summary || !start || !end) throw new ApiError(400, "invalid_payload", "summary, start, and end are required");
+  const description = readStringField(args, "description");
+  const location = readStringField(args, "location");
+  const timeZone = readStringField(args, "timeZone");
+  const attendees = stringArrayField(args.attendees);
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireCalendarWriteScope(record);
+  return fetchGoogleJson("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      summary,
+      ...(description ? { description } : {}),
+      ...(location ? { location } : {}),
+      start: { dateTime: start, ...(timeZone ? { timeZone } : {}) },
+      end: { dateTime: end, ...(timeZone ? { timeZone } : {}) },
+      ...(attendees.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
+    }),
+  });
+}
+
+function chatSpaceName(args: Record<string, unknown>): string {
+  const spaceId = readStringField(args, "spaceId");
+  if (!spaceId) throw new ApiError(400, "invalid_payload", "spaceId is required");
+  return spaceId.startsWith("spaces/") ? spaceId : `spaces/${spaceId}`;
+}
+
+async function googleWorkspaceListChatSpaces(config: ServerConfig, args: Record<string, unknown>) {
+  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 25), 1), 100);
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireChatScope(record, CHAT_SPACES_SCOPE);
+  const url = new URL("https://chat.googleapis.com/v1/spaces");
+  url.searchParams.set("pageSize", String(maxResults));
+  return fetchGoogleJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+}
+
+async function googleWorkspaceListChatMessages(config: ServerConfig, args: Record<string, unknown>) {
+  const space = chatSpaceName(args);
+  const maxResults = Math.min(Math.max(Number(args.maxResults ?? 25), 1), 100);
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireChatScope(record, CHAT_MESSAGES_READ_SCOPE);
+  const url = new URL(`https://chat.googleapis.com/v1/${space}/messages`);
+  url.searchParams.set("pageSize", String(maxResults));
+  url.searchParams.set("orderBy", "createTime desc");
+  return fetchGoogleJson(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+}
+
+async function googleWorkspaceSendChatMessage(config: ServerConfig, args: Record<string, unknown>) {
+  const space = chatSpaceName(args);
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!text) throw new ApiError(400, "invalid_payload", "text is required");
+  const { record, accessToken } = await googleWorkspaceAccessToken(config);
+  requireChatScope(record, CHAT_MESSAGES_CREATE_SCOPE);
+  return fetchGoogleJson(`https://chat.googleapis.com/v1/${space}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
 export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, action: string, args: Record<string, unknown>, context: Record<string, unknown>) {
   if (action === "status") {
     return {
@@ -987,6 +1231,8 @@ export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, a
   }
   if (action === "calendar_list_events") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListEvents(config, args), context };
   if (action === "gmail_create_draft") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateDraft(config, args), context };
+  if (action === "gmail_list_messages") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListMessages(config, args), context };
+  if (action === "gmail_get_message") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetMessage(config, args), context };
   if (action === "drive_search_files") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceSearchFiles(config, args), context };
   if (action === "drive_read_file") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceReadFile(config, args), context };
   if (action === "docs_create_document") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateDocument(config, args), context };
@@ -1000,10 +1246,13 @@ export async function callGoogleWorkspaceExtensionAction(config: ServerConfig, a
   if (action === "sheets_get_values") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetValues(config, args), context };
   if (action === "sheets_update_values") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateValues(config, args), context };
   if (action === "sheets_update_spreadsheet") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateSpreadsheet(config, args), context };
-  if (action === "gmail_list_messages") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListMessages(config, args), context };
-  if (action === "gmail_get_message") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetMessage(config, args), context };
   if (action === "gmail_list_threads") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListThreads(config, args), context };
   if (action === "gmail_get_thread") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceGetThread(config, args), context };
+  if (action === "drive_update_file") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceUpdateFile(config, args), context };
+  if (action === "calendar_create_event") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceCreateEvent(config, args), context };
+  if (action === "chat_list_spaces") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListChatSpaces(config, args), context };
+  if (action === "chat_list_messages") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceListChatMessages(config, args), context };
+  if (action === "chat_send_message") return { ok: true, extensionId: GOOGLE_WORKSPACE_EXTENSION_ID, action, result: await googleWorkspaceSendChatMessage(config, args), context };
   return null;
 }
 
@@ -1053,6 +1302,16 @@ export async function googleWorkspaceRunScopeSmokeTest(config: ServerConfig) {
       gmailDraftId: isRecord(draft) && typeof draft.id === "string" ? draft.id : null,
     },
   });
+}
+
+export async function googleWorkspaceSetActiveAccount(config: ServerConfig, accountId: string) {
+  const vault = await readGoogleWorkspaceVault(config);
+  const accounts = googleWorkspaceAccountRecords(vault);
+  const account = accounts.find((entry) => googleWorkspaceAccountId(entry) === accountId);
+  if (!account) throw new ApiError(404, "google_workspace_account_not_found", "Google Workspace account is not connected.");
+  await writeGoogleWorkspaceAccountsVault(config, accounts, accountId);
+  const nextVault = await readGoogleWorkspaceVault(config);
+  return googleWorkspaceStatusPayload(nextVault, { testStatus: "Default Google Workspace account updated." });
 }
 
 export async function googleWorkspaceDisconnect(config: ServerConfig, accountId: string | null = null) {
@@ -1107,11 +1366,17 @@ export function createGoogleWorkspaceConnectFlowManager(config: ServerConfig) {
     flows.delete(flowId);
   };
 
-  const start = async () => {
+  const start = async (options: { gmailRead?: boolean; features?: string[] } = {}) => {
     const credentials = googleWorkspaceCredentials();
     if (credentials.missing.length > 0) {
       throw new ApiError(400, "google_oauth_not_configured", `Missing Google OAuth configuration: ${credentials.missing.join(", ")}`);
     }
+    const features = new Set((options.features ?? []).filter(isGoogleWorkspaceOptionalFeature));
+    if (options.gmailRead) features.add("gmailRead");
+    if (features.size > 0 && !credentials.customClient) {
+      throw new ApiError(400, "google_extra_scopes_require_custom_client", "Extra Google permissions (Gmail read, full Drive, calendar editing, Google Chat) are only available when using your own Google OAuth client.");
+    }
+    const scopes = [...GOOGLE_WORKSPACE_SCOPES, ...[...features].flatMap((feature) => GOOGLE_WORKSPACE_OPTIONAL_FEATURES[feature])];
     const flowId = base64Url(randomBytes(18));
     const state = base64Url(randomBytes(24));
     const pkce = createGoogleWorkspacePkce();
@@ -1159,7 +1424,7 @@ export function createGoogleWorkspaceConnectFlowManager(config: ServerConfig) {
             const record = {
               version: 1,
               account,
-              scopes: typeof token.scope === "string" ? token.scope.split(/\s+/).filter(Boolean) : GOOGLE_WORKSPACE_SCOPES,
+              scopes: typeof token.scope === "string" ? token.scope.split(/\s+/).filter(Boolean) : scopes,
               token: {
                 accessToken: token.access_token,
                 refreshToken: typeof token.refresh_token === "string" ? token.refresh_token : null,
@@ -1200,7 +1465,7 @@ export function createGoogleWorkspaceConnectFlowManager(config: ServerConfig) {
     authorizationUrl.searchParams.set("client_id", credentials.clientId);
     authorizationUrl.searchParams.set("redirect_uri", redirectUri);
     authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set("scope", GOOGLE_WORKSPACE_SCOPES.join(" "));
+    authorizationUrl.searchParams.set("scope", scopes.join(" "));
     authorizationUrl.searchParams.set("access_type", "offline");
     authorizationUrl.searchParams.set("prompt", "consent");
     authorizationUrl.searchParams.set("state", state);

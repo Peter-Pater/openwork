@@ -20,7 +20,7 @@ import {
   setDesktopBootstrapConfig as setDesktopBootstrapConfigInShell,
   type DesktopBootstrapConfig as ShellDesktopBootstrapConfig,
 } from "./desktop";
-import { isDesktopRuntime } from "../utils";
+import { isDesktopRuntime } from "./runtime-env";
 import type { DenOrgSkillCard, ReloadReason } from "../types";
 import type {
   OpenWorkExtensionContribution,
@@ -60,14 +60,25 @@ const BUILD_DEN_REQUIRE_SIGNIN =
 export const DEFAULT_DEN_BASE_URL = BUILD_DEN_BASE_URL;
 export const DEN_INFERENCE_PATH = "/dashboard/inference";
 
-export type DenSettings = {
-  baseUrl: string;
-  apiBaseUrl?: string;
-  authToken?: string | null;
-  activeOrgId?: string | null;
-  activeOrgSlug?: string | null;
-  activeOrgName?: string | null;
-};
+// Den wire types moved to den-types.ts (leaf module); re-exported here so
+// the many existing den.ts importers keep working.
+export type * from "./den-types";
+import type {
+  DenOrgExtensionProjection,
+  DenOrgMarketplace,
+  DenOrgPlugin,
+  DenOrgPluginResolved,
+  DenPluginConfigObject,
+  DenPluginConfigObjectType,
+  DenPluginConfigObjectVersion,
+  DenPluginMembership,
+  DenResourceSnapshot,
+  DenResourceSnapshotConfigItem,
+  DenResourceSnapshotMarketplace,
+  DenResourceSnapshotPlugin,
+  DenSettings,
+  DenUser,
+} from "./den-types";
 
 type DenBaseUrls = {
   baseUrl: string;
@@ -79,12 +90,6 @@ export type DenBootstrapConfig = DenBaseUrls & {
 };
 
 export type DenDesktopConfig = SharedDesktopConfig;
-
-export type DenUser = {
-  id: string;
-  email: string;
-  name: string | null;
-};
 
 export type DenOrgSummary = {
   id: string;
@@ -111,6 +116,14 @@ export type DenWorkerTokens = {
   workspaceId: string | null;
 };
 
+export type DenMcpToken = {
+  token: string;
+  expiresAt: string;
+  organizationId: string;
+  scopes: string[];
+  resource: string;
+};
+
 export type DenOrgLlmProviderModel = {
   id: string;
   name: string;
@@ -134,75 +147,9 @@ export type DenOrgLlmProviderConnection = DenOrgLlmProvider & {
   apiKey: string | null;
 };
 
-export type DenPluginConfigObjectType = "skill" | "agent" | "command" | "tool" | "mcp" | "hook" | "context" | "custom";
-
-export type DenPluginConfigObjectVersion = {
-  id: string;
-  rawSourceText: string | null;
-  normalizedPayloadJson: Record<string, unknown> | null;
-  sourceRevisionRef: string | null;
-  createdAt: string | null;
-};
-
-export type DenPluginConfigObject = {
-  id: string;
-  objectType: DenPluginConfigObjectType;
-  title: string;
-  description: string | null;
-  currentFileName: string | null;
-  currentFileExtension: string | null;
-  currentRelativePath: string | null;
-  status: string;
-  updatedAt: string | null;
-  latestVersion: DenPluginConfigObjectVersion | null;
-};
-
-export type DenPluginMembership = {
-  id: string;
-  pluginId: string;
-  configObjectId: string;
-  configObject?: DenPluginConfigObject;
-};
-
-export type DenOrgExtensionProjection = {
-  id: string;
-  name: string;
-  description: string | null;
-  sourceFormat: OpenWorkExtensionSourceFormat;
-  manifest: OpenWorkExtensionManifest | null;
-};
-
-export type DenOrgPlugin = {
-  id: string;
-  name: string;
-  description: string | null;
-  status: string;
-  memberCount: number;
-  updatedAt: string | null;
-  componentCounts: Record<string, number>;
-  /** Preferred Den surface: plugins are normalized into OpenWork extensions. */
-  extension?: DenOrgExtensionProjection | null;
-};
-
-export type DenOrgMarketplace = {
-  id: string;
-  name: string;
-  description: string | null;
-  status: string;
-  pluginCount: number;
-  updatedAt: string | null;
-};
-
 export type DenOrgMarketplaceResolved = {
   marketplace: DenOrgMarketplace;
   plugins: DenOrgPlugin[];
-};
-
-export type DenOrgPluginResolved = {
-  plugin: DenOrgPlugin;
-  memberships: DenPluginMembership[];
-  /** Future Den extension manifest; absent while Claude plugin imports are resource-only. */
-  extension?: DenOrgExtensionProjection | null;
 };
 
 export type DenBillingPrice = {
@@ -247,32 +194,6 @@ export type DenBillingSummary = {
   invoices: DenBillingInvoice[];
   productId: string | null;
   benefitId: string | null;
-};
-
-export type DenResourceSnapshotConfigItem = {
-  configItemId: string;
-  lastUpdatedAt: string;
-};
-
-export type DenResourceSnapshotPlugin = {
-  pluginId: string;
-  lastUpdatedAt: string;
-  configItems: DenResourceSnapshotConfigItem[];
-};
-
-export type DenResourceSnapshotMarketplace = {
-  lastUpdatedAt: string;
-  plugins: DenResourceSnapshotPlugin[];
-};
-
-export type DenResourceSnapshot = {
-  organizationId: string;
-  orgMemberId: string;
-  teamIds: string[];
-  resources: {
-    llmProviders: Record<string, string>;
-    marketplaces: Record<string, DenResourceSnapshotMarketplace>;
-  };
 };
 
 type DenAuthResult = {
@@ -440,6 +361,26 @@ export function normalizeDenBaseUrl(input: string | null | undefined): string | 
   }
 }
 
+/**
+ * Origin-level comparison key for Den URLs. Ignores paths (deep links may
+ * carry an `/api/den` proxy path) and treats loopback aliases (127.0.0.1,
+ * [::1]) as `localhost`, matching den-api's own dev-mode resource aliasing.
+ */
+export function denOriginComparisonKey(input: string | null | undefined): string | null {
+  const normalized = normalizeDenBaseUrl(input);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    const host = url.hostname.toLowerCase();
+    if (host === "127.0.0.1" || host === "::1" || host === "[::1]" || host === "0.0.0.0") {
+      url.hostname = "localhost";
+    }
+    return url.origin;
+  } catch {
+    return normalized;
+  }
+}
+
 export function getDenInferenceUrl(baseUrl?: string | null): string {
   const normalized = normalizeDenBaseUrl(baseUrl ?? readDenSettings().baseUrl) ?? DEFAULT_DEN_BASE_URL;
   return `${normalized}${DEN_INFERENCE_PATH}`;
@@ -476,7 +417,43 @@ function isWebAppHost(hostname: string): boolean {
     }
   }
 
-  return normalized === "app.openworklabs.com" || normalized === "app.openwork.software" || normalized.startsWith("app.");
+  return (
+    normalized === "app.openworklabs.com" ||
+    normalized === "app.openwork.software" ||
+    normalized.startsWith("app.") ||
+    // Cloud Run hostnames serve the den-web frontend, which only exposes the
+    // Den API behind its `/api/den` proxy path (see #1807/#1808).
+    normalized.endsWith(".run.app")
+  );
+}
+
+/**
+ * Hosted web-app hosts (`app.openworklabs.com`, `app.openwork.software`,
+ * `app.*`) never serve the Den API at their root — only behind the
+ * `/api/den` proxy. Loopback/private hosts are excluded on purpose: in dev
+ * an explicit apiBaseUrl may point directly at den-api.
+ */
+function isHostedWebAppHost(hostname: string): boolean {
+  return hostname.trim().toLowerCase().startsWith("app.");
+}
+
+/**
+ * Older builds persisted the bare web-app origin as the API base URL
+ * (bootstrap file and localStorage). Requests against that origin 404 —
+ * notably the cloud MCP at `https://app.openworklabs.com/mcp`. Heal such
+ * values by routing them through the web app's `/api/den` proxy.
+ */
+function healWebAppApiBaseUrl(input: string | null): string | null {
+  if (!input) return null;
+  try {
+    const url = new URL(input);
+    if (isHostedWebAppHost(url.hostname)) {
+      return ensureDenApiBasePath(input);
+    }
+  } catch {
+    // Not a URL — leave untouched.
+  }
+  return input;
 }
 
 function stripDenApiBasePath(input: string | null | undefined): string | null {
@@ -544,8 +521,57 @@ export function resolveDenBaseUrls(input: { baseUrl?: string | null; apiBaseUrl?
 
   return {
     baseUrl: stripDenApiBasePath(normalizedBaseUrl ?? seedUrl) ?? DEFAULT_DEN_BASE_URL,
-    apiBaseUrl: normalizedApiBaseUrl ?? deriveDenApiBaseUrl(seedUrl),
+    apiBaseUrl: healWebAppApiBaseUrl(normalizedApiBaseUrl) ?? deriveDenApiBaseUrl(seedUrl),
   };
+}
+
+/**
+ * The MCP endpoint served by den-api, resolved from the bootstrap config.
+ * On the hosted web app this goes through the `/api/den` proxy
+ * (`https://app.openworklabs.com/api/den/mcp`); a direct API origin maps to
+ * `<apiBaseUrl>/mcp` (canonically `https://api.openworklabs.com/mcp`).
+ */
+export function getDenMcpUrl(): string {
+  const { apiBaseUrl } = resolveDenBaseUrls(readDenBootstrapConfig());
+  return `${apiBaseUrl.replace(/\/+$/, "")}/mcp`;
+}
+
+/**
+ * Detects MCP URLs written by older builds that pointed `/mcp` at the bare
+ * web-app origin (e.g. `https://app.openworklabs.com/mcp`). Nothing serves
+ * MCP there — those entries fail with a 404 and must be reconfigured.
+ */
+export function isLegacyWebAppMcpUrl(input: string | null | undefined): boolean {
+  if (!input) return false;
+  try {
+    const url = new URL(input);
+    return isHostedWebAppHost(url.hostname) && url.pathname.replace(/\/+$/, "") === "/mcp";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the URL the cloud MCP entry should connect to from a minted
+ * token's `resource`. Older den-api builds mint the bare web-app origin
+ * (`https://app.openworklabs.com/mcp`) where nothing serves MCP — heal
+ * those to the `/api/den` proxy on the same origin instead of trusting
+ * them verbatim. Returns null when the resource is unusable so callers
+ * can keep their bootstrap-derived URL.
+ */
+export function resolveCloudMcpResourceUrl(resource: string | null | undefined): string | null {
+  const trimmed = resource?.trim() ?? "";
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (isLegacyWebAppMcpUrl(trimmed)) {
+      url.pathname = "/api/den/mcp";
+    }
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
 }
 
 function resolveDenBootstrapConfig(
@@ -598,17 +624,50 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
     return desktopBootstrapConfig;
   }
 
-  try {
-    const bootstrap = await getDesktopBootstrapConfigFromShell() as ShellDesktopBootstrapConfig;
-    applyDesktopBootstrapConfig(resolveDenBootstrapConfig(bootstrap));
-  } catch {
-    desktopBootstrapConfig = resolveDenBootstrapConfig({
-      baseUrl: BUILD_DEN_BASE_URL,
-      apiBaseUrl: BUILD_DEN_API_BASE_URL,
-      requireSignin: BUILD_DEN_REQUIRE_SIGNIN,
-    });
-    syncBootstrapSettingsToLocalStorage(desktopBootstrapConfig);
+  // The shell IPC bridge can be momentarily unavailable at first paint;
+  // retry briefly before giving up so a boot race does not poison the
+  // session with build defaults.
+  const SHELL_BOOTSTRAP_ATTEMPTS = 3;
+  const SHELL_BOOTSTRAP_RETRY_DELAY_MS = 350;
+  for (let attempt = 1; attempt <= SHELL_BOOTSTRAP_ATTEMPTS; attempt += 1) {
+    try {
+      const bootstrap = await getDesktopBootstrapConfigFromShell() as ShellDesktopBootstrapConfig;
+      applyDesktopBootstrapConfig(resolveDenBootstrapConfig(bootstrap));
+      return desktopBootstrapConfig;
+    } catch (error) {
+      console.error("[den-bootstrap] shell read failed", attempt, error);
+      if (attempt < SHELL_BOOTSTRAP_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, SHELL_BOOTSTRAP_RETRY_DELAY_MS));
+      }
+    }
   }
+
+  // All quick attempts failed. Keep build defaults in memory only — do NOT
+  // sync them to localStorage: previously synced values from a successful
+  // boot are more trustworthy than build defaults, and clobbering them
+  // silently reverted custom/self-hosted control planes to the production
+  // URL until a manual reload.
+  desktopBootstrapConfig = resolveDenBootstrapConfig({
+    baseUrl: BUILD_DEN_BASE_URL,
+    apiBaseUrl: BUILD_DEN_API_BASE_URL,
+    requireSignin: BUILD_DEN_REQUIRE_SIGNIN,
+  });
+
+  // Heal in the background without blocking boot: once the bridge comes up,
+  // apply the real shell config and notify listeners.
+  void (async () => {
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      try {
+        const bootstrap = await getDesktopBootstrapConfigFromShell() as ShellDesktopBootstrapConfig;
+        applyDesktopBootstrapConfig(resolveDenBootstrapConfig(bootstrap));
+        dispatchDenSettingsChanged({ settings: readDenSettings() });
+        return;
+      } catch {
+        // Bridge still unavailable — keep trying.
+      }
+    }
+  })();
 
   return desktopBootstrapConfig;
 }
@@ -935,7 +994,28 @@ function getWorkerTokens(payload: unknown): DenWorkerTokens | null {
   };
 }
 
-function parseDenOrgSkillRow(record: Record<string, unknown>, hubName: string | null): DenOrgSkillCard | null {
+function getMcpToken(payload: unknown): DenMcpToken | null {
+  if (
+    !isRecord(payload) ||
+    typeof payload.token !== "string" ||
+    typeof payload.expiresAt !== "string" ||
+    typeof payload.organizationId !== "string" ||
+    typeof payload.resource !== "string"
+  ) {
+    return null;
+  }
+  return {
+    token: payload.token,
+    expiresAt: payload.expiresAt,
+    organizationId: payload.organizationId,
+    scopes: Array.isArray(payload.scopes)
+      ? payload.scopes.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    resource: payload.resource,
+  };
+}
+
+function parseDenOrgSkillRow(record: Record<string, unknown>): DenOrgSkillCard | null {
   if (typeof record.id !== "string" || typeof record.title !== "string" || typeof record.skillText !== "string") {
     return null;
   }
@@ -946,7 +1026,6 @@ function parseDenOrgSkillRow(record: Record<string, unknown>, hubName: string | 
     title: record.title,
     description,
     skillText: record.skillText,
-    hubName,
     shared,
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : null,
   };
@@ -957,34 +1036,8 @@ function getDenOrgSkillsFromPayload(payload: unknown): DenOrgSkillCard[] {
     return [];
   }
   return payload.skills.flatMap((entry) => {
-    const skill = isRecord(entry) ? parseDenOrgSkillRow(entry, null) : null;
+    const skill = isRecord(entry) ? parseDenOrgSkillRow(entry) : null;
     return skill ? [skill] : [];
-  });
-}
-
-export type DenOrgSkillHub = { id: string; name: string; skills: DenOrgSkillCard[] };
-
-function parseOrgSkillHubEntry(hub: Record<string, unknown>): DenOrgSkillHub | null {
-  const hubId = hub.id;
-  const hubName = hub.name;
-  const hubSkills = hub.skills;
-  if (typeof hubId !== "string" || typeof hubName !== "string" || !Array.isArray(hubSkills)) {
-    return null;
-  }
-  const skills = hubSkills.flatMap((s) => {
-    const skill = isRecord(s) ? parseDenOrgSkillRow(s, hubName) : null;
-    return skill ? [skill] : [];
-  });
-  return { id: hubId, name: hubName, skills };
-}
-
-function getDenOrgSkillHubsFromPayload(payload: unknown): DenOrgSkillHub[] {
-  if (!isRecord(payload) || !Array.isArray(payload.skillHubs)) {
-    return [];
-  }
-  return payload.skillHubs.flatMap((entry) => {
-    const hub = isRecord(entry) ? parseOrgSkillHubEntry(entry) : null;
-    return hub ? [hub] : [];
   });
 }
 
@@ -1501,26 +1554,6 @@ function getBillingInvoice(value: unknown): DenBillingInvoice | null {
   };
 }
 
-export type DenOrgSkillHubSummary = {
-  id: string;
-  name: string;
-  canManage: boolean;
-};
-
-function getOrgSkillHubSummaries(payload: unknown): DenOrgSkillHubSummary[] {
-  if (!isRecord(payload) || !Array.isArray(payload.skillHubs)) {
-    return [];
-  }
-
-  return payload.skillHubs.flatMap((entry) => {
-    if (!isRecord(entry)) return [];
-    if (typeof entry.id !== "string" || typeof entry.name !== "string" || typeof entry.canManage !== "boolean") {
-      return [];
-    }
-    return [{ id: entry.id, name: entry.name, canManage: entry.canManage }];
-  });
-}
-
 function getCreatedOrgSkillId(payload: unknown): string | null {
   if (!isRecord(payload) || !isRecord(payload.skill)) return null;
   return typeof payload.skill.id === "string" ? payload.skill.id : null;
@@ -1685,6 +1718,14 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
   const token = options.token?.trim() ?? null;
 
   return {
+    /**
+     * The resolved URLs this client actually talks to. Call sites that
+     * persist Den settings after a successful auth flow should store
+     * `baseUrls.apiBaseUrl` so relaunches reuse the exact endpoint that
+     * worked instead of re-deriving it from the web URL (see #1808).
+     */
+    baseUrls,
+
     async setActiveOrganization(input: { organizationId?: string | null; organizationSlug?: string | null }): Promise<void> {
       await ensureActiveOrganization(baseUrls, token, input);
     },
@@ -1804,6 +1845,20 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
       return getWorkers(payload);
     },
 
+    async mintMcpToken(orgId: string): Promise<DenMcpToken> {
+      const payload = await requestJson<unknown>(baseUrls, "/v1/mcp/token", {
+        method: "POST",
+        token,
+        organizationId: orgId,
+        body: { scopes: ["mcp:read", "mcp:write"] },
+      });
+      const minted = getMcpToken(payload);
+      if (!minted) {
+        throw new DenApiError(500, "invalid_mcp_token_payload", "MCP token response was missing required values.");
+      }
+      return minted;
+    },
+
     async getWorkerTokens(workerId: string, orgId: string): Promise<DenWorkerTokens> {
       const payload = await requestJson<unknown>(baseUrls, `/v1/workers/${encodeURIComponent(workerId)}/tokens`, {
         method: "POST",
@@ -1827,24 +1882,6 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
       return getDenOrgSkillsFromPayload(payload);
     },
 
-    async listOrgSkillHubs(orgId: string): Promise<DenOrgSkillHub[]> {
-      const payload = await requestJson<unknown>(baseUrls, "/v1/skill-hubs", {
-        method: "GET",
-        token,
-        organizationId: orgId,
-      });
-      return getDenOrgSkillHubsFromPayload(payload);
-    },
-
-    async listOrgSkillHubSummaries(orgId: string): Promise<DenOrgSkillHubSummary[]> {
-      const payload = await requestJson<unknown>(baseUrls, "/v1/skill-hubs", {
-        method: "GET",
-        token,
-        organizationId: orgId,
-      });
-      return getOrgSkillHubSummaries(payload);
-    },
-
     async createOrgSkill(
       orgId: string,
       input: { skillText: string; shared?: "org" | "public" | null },
@@ -1864,19 +1901,6 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
         throw new DenApiError(500, "invalid_skill_payload", "Skill response was missing id.");
       }
       return { id };
-    },
-
-    async addOrgSkillToHub(orgId: string, skillHubId: string, skillId: string): Promise<void> {
-      await requestJson<unknown>(
-        baseUrls,
-        `/v1/skill-hubs/${encodeURIComponent(skillHubId)}/skills`,
-        {
-          method: "POST",
-          token,
-          organizationId: orgId,
-          body: { skillId },
-        },
-      );
     },
 
     async listOrgLlmProviders(orgId: string): Promise<DenOrgLlmProvider[]> {
@@ -1982,21 +2006,30 @@ export async function fetchDenOrgSkillsCatalog(
   client: ReturnType<typeof createDenClient>,
   orgId: string,
 ): Promise<DenOrgSkillCard[]> {
-  const [hubs, flatSkills] = await Promise.all([client.listOrgSkillHubs(orgId), client.listOrgSkills(orgId)]);
-  const hubNameBySkillId = new Map<string, string>();
-  for (const hub of hubs) {
-    for (const skill of hub.skills) {
-      if (!hubNameBySkillId.has(skill.id)) {
-        hubNameBySkillId.set(skill.id, hub.name);
-      }
-    }
-  }
+  const skills = await client.listOrgSkills(orgId);
   const byId = new Map<string, DenOrgSkillCard>();
-  for (const skill of flatSkills) {
-    byId.set(skill.id, {
-      ...skill,
-      hubName: hubNameBySkillId.get(skill.id) ?? null,
-    });
+  for (const skill of skills) {
+    byId.set(skill.id, skill);
   }
   return Array.from(byId.values()).toSorted((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * Mint an org-scoped MCP access token for the Den cloud MCP using the
+ * current desktop Den session. Returns null when signed out or no active
+ * organization is selected.
+ */
+export async function mintCloudControlMcpToken(): Promise<DenMcpToken | null> {
+  const settings = readDenSettings();
+  const token = settings.authToken?.trim() ?? "";
+  const orgId = settings.activeOrgId?.trim() ?? "";
+  if (!token || !orgId) {
+    return null;
+  }
+  const client = createDenClient({
+    baseUrl: settings.baseUrl,
+    apiBaseUrl: settings.apiBaseUrl ?? null,
+    token,
+  });
+  return client.mintMcpToken(orgId);
 }

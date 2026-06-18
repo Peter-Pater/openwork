@@ -84,6 +84,7 @@ type DenFlowContextValue = {
   desktopRedirectUrl: string | null;
   desktopRedirectBusy: boolean;
   showAuthFeedback: boolean;
+  continueSignInWithEmail: () => Promise<boolean>;
   submitAuth: (event: FormEvent<HTMLFormElement>) => Promise<AuthNavigationResult>;
   submitVerificationCode: (event: FormEvent<HTMLFormElement>) => Promise<AuthNavigationResult>;
   resendVerificationCode: () => Promise<void>;
@@ -179,7 +180,7 @@ export function DenFlowProvider({ children }: { children: ReactNode }) {
 
     return token;
   });
-  const [sessionHydrated, setSessionHydrated] = useState(true);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
   const [desktopAuthRequested, setDesktopAuthRequested] = useState(false);
   const [desktopAuthScheme, setDesktopAuthScheme] = useState("openwork");
   const [desktopRedirectBusy, setDesktopRedirectBusy] = useState(false);
@@ -365,6 +366,38 @@ export function DenFlowProvider({ children }: { children: ReactNode }) {
     nextUrl.searchParams.set("loginHint", trimmedEmail);
     window.location.assign(nextUrl.toString());
     return true;
+  }
+
+  async function continueSignInWithEmail() {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setAuthError("Enter your email to continue.");
+      return false;
+    }
+
+    setAuthBusy(true);
+    setAuthError(null);
+    setAuthInfo("Checking your workspace sign-in settings...");
+    trackPosthogEvent("den_auth_submitted", {
+      mode: "sign-in",
+      method: "email_next",
+      email_domain: getEmailDomain(trimmedEmail),
+    });
+
+    try {
+      if (await redirectToRequiredSso(trimmedEmail)) {
+        return false;
+      }
+
+      setAuthInfo("Enter your password to finish signing in.");
+      return true;
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Could not check workspace sign-in settings.");
+      setAuthInfo(getAuthInfoForMode("sign-in"));
+      return false;
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   async function finalizeEmailPasswordSignIn(
@@ -1945,7 +1978,13 @@ export function DenFlowProvider({ children }: { children: ReactNode }) {
     }
 
     onboardingAutoLaunchKeyRef.current = autoLaunchKey;
-    markOnboardingComplete();
+    // Launch the first worker through the canonical POST /v1/workers path;
+    // the Den API selects the configured provisioner (render/daytona/static)
+    // server-side. PR #1181 replaced this with a bare markOnboardingComplete,
+    // which let signup finish with zero workers (#1961). launchWorker marks
+    // onboarding complete itself on success; on failure onboarding stays
+    // pending so the user sees the error and can retry.
+    void launchWorker({ source: "signup_auto", workerNameOverride: onboardingIntent?.workerName ?? DEFAULT_WORKER_NAME });
   }, [billingSummary?.featureGateEnabled, billingSummary?.hasActivePlan, launchBusy, onboardingIntent?.workerName, onboardingPending, ownedWorkerCount, user?.id]);
 
   useEffect(() => {
@@ -1980,6 +2019,7 @@ export function DenFlowProvider({ children }: { children: ReactNode }) {
     desktopRedirectUrl,
     desktopRedirectBusy,
     showAuthFeedback,
+    continueSignInWithEmail,
     submitAuth,
     submitVerificationCode,
     resendVerificationCode,

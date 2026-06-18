@@ -41,12 +41,35 @@ function run(command, args, options = {}) {
   return result;
 }
 
+function signingIdentity() {
+  const fromEnv = process.env.OPENWORK_COMPUTER_USE_SIGN_IDENTITY;
+  if (fromEnv) return fromEnv;
+  const result = spawnSync("security", ["find-identity", "-v", "-p", "codesigning"], { encoding: "utf8" });
+  if (result.status !== 0) return "-";
+  const match = result.stdout.match(/"(Developer ID Application: [^"]+)"/);
+  // Prefer a stable Developer ID signature so macOS TCC permission grants
+  // (Accessibility, Screen Recording) survive rebuilds. Ad-hoc signatures are
+  // content hashes, so every rebuild would invalidate existing grants.
+  return match ? match[1] : "-";
+}
+
 function signHelperApp() {
   if (process.platform !== "darwin") return;
-  const result = spawnSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
+  const identity = signingIdentity();
+  const args = ["--force", "--deep", "--sign", identity];
+  if (identity !== "-") args.push("--options", "runtime");
+  const result = spawnSync("codesign", [...args, appPath], {
     encoding: "utf8",
     stdio: "pipe",
   });
+  if (identity !== "-" && (result.status !== 0 || result.error)) {
+    // Keychain may refuse non-interactive signing; fall back to ad-hoc.
+    const fallback = spawnSync("codesign", ["--force", "--deep", "--sign", "-", appPath], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    if (fallback.status === 0) return;
+  }
   if (result.error) {
     if (result.error.code === "ENOENT") {
       throw new Error("codesign is required to prepare the Computer Use helper app");
