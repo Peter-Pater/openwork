@@ -224,7 +224,12 @@ export function buildExtensionItems(input: ExtensionItemBuildInput) {
     // signed in to cloud (regression from #2008, which narrowed the section
     // to installed entries only).
     quickConnectEntries: [
-      ...builtInItems.flatMap((item) => item.active && item.builtInEntry ? [item.builtInEntry] : []),
+      // Built-ins must always be discoverable in the quick-connect surface,
+      // even before they are connected/configured — otherwise an unconnected
+      // built-in like Google Workspace (which has no enablement toggle, so its
+      // `active` is purely "is it connected?") becomes impossible to find and
+      // set up. `active` drives the install/connect badge, not list membership.
+      ...builtInItems.flatMap((item) => item.builtInEntry ? [item.builtInEntry] : []),
       ...standaloneMcpEntries,
       ...input.quickConnect.filter((entry) => {
         if (isBuiltInOpenWorkExtension(entry)) return false;
