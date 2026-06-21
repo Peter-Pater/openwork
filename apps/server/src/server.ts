@@ -75,6 +75,7 @@ import {
   writeRuntimeOpencodeConfig,
 } from "./runtime-opencode-config-store.js";
 import { spatialEventsBroker } from "./events.js";
+import { spatialStreamRelay, spatialStreamCoordinator } from "./spatial-stream-relay.js";
 import {
   mergeOpenworkWorkspaceConfigs,
   readOpenworkWorkspaceConfig,
@@ -714,6 +715,11 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const server = await serve({
     ...serverOptions,
     idleTimeout: 120,
+    upgrade: (request, socket, head) => {
+      if (!spatialStreamRelay.handleUpgrade(request, socket, head)) {
+        socket.destroy();
+      }
+    },
   });
 
   return {
@@ -1411,6 +1417,12 @@ function createRoutes(
     const body = await readJsonBody(ctx.request);
     const text = typeof body.prompt === "string" ? body.prompt.trim() : "";
     if (!text) throw new ApiError(400, "bad_request", "Missing prompt");
+
+    // If the XR drop told us which Doc this session is working on, start the
+    // live window stream for it (artifact-gated; no fileId → no window).
+    const fileId = typeof body.fileId === "string" ? body.fileId.trim() : "";
+    if (fileId) spatialStreamCoordinator.noteSessionDoc(sessionId, fileId);
+
     const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
 
     // Resolve the session's configured model/agent and reuse them. prompt_async

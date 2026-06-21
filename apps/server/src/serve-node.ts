@@ -6,13 +6,19 @@
  * environment (including Electron's main process) without Bun.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { Readable, type Duplex } from "node:stream";
 
 export type ServeOptions = {
   hostname: string;
   port: number;
   fetch: (request: Request) => Response | Promise<Response>;
   idleTimeout?: number;
+  /**
+   * Optional HTTP upgrade handler (e.g. for WebSocket). Invoked for every
+   * `Connection: Upgrade` request; the handler is responsible for completing
+   * or destroying the socket.
+   */
+  upgrade?: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
 };
 
 export type ServeResult = {
@@ -186,6 +192,10 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
       endResponse(nodeRes, JSON.stringify({ error: "internal_error" }));
     }
   });
+
+  if (options.upgrade) {
+    server.on("upgrade", options.upgrade);
+  }
 
   // Set keep-alive timeout to match Bun's idleTimeout
   if (options.idleTimeout) {

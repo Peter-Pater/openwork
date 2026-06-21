@@ -21,6 +21,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, session,
 import { configureFakeMediaForTests, installMediaPermissionHandlers } from "./media-permissions.mjs";
 import { registerMigrationIpc } from "./migration.mjs";
 import { createRuntimeManager } from "./runtime.mjs";
+import { createSpatialStreamCapture } from "./spatial-stream-capture.mjs";
 import { registerUpdaterIpc } from "./updater.mjs";
 import {
   checkComputerUsePermissions,
@@ -515,6 +516,28 @@ const runtimeManager = createRuntimeManager({
   app,
   desktopRoot: path.resolve(__dirname, ".."),
   listLocalWorkspacePaths: () => workspaceStore.listLocalWorkspacePaths(),
+});
+
+// XR "virtual screens": connects to the server's stream relay and opens a
+// hidden browser window per agent session on demand, streaming its frames.
+// Self-healing — retries until the embedded server reports a base URL.
+const spatialStreamCapture = createSpatialStreamCapture({
+  getServerUrl: async () => {
+    try {
+      const info = await runtimeManager.openworkServerInfo();
+      return info?.baseUrl ?? null;
+    } catch {
+      return null;
+    }
+  },
+});
+spatialStreamCapture.start();
+app.on("will-quit", () => {
+  try {
+    spatialStreamCapture.stop();
+  } catch {
+    /* ignore */
+  }
 });
 
 let runtimeDisposedForQuit = false;
