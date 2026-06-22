@@ -20,6 +20,11 @@ const RECONNECT_MS = 2000;
 const SHOW_CAPTURE = process.env.OPENWORK_SPATIAL_SHOW_CAPTURE === "1";
 const CAPTURE_WIDTH = 1280;
 const CAPTURE_HEIGHT = 800;
+// macOS clamps every window so a minimum sliver stays on a display (so the user
+// can always reach it), meaning no off-screen x/y can fully hide it. So on Mac
+// we leave it on-screen but transparent (it still paints → screencast frames
+// keep flowing); Windows honors the off-screen position and needs no opacity.
+const IS_MAC = process.platform === "darwin";
 
 export function createSpatialStreamCapture({ getServerUrl }) {
   let ws = null;
@@ -160,6 +165,16 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         win.showInactive();
       } catch {
         /* ignore */
+      }
+      // On macOS the window can't be parked fully off-screen, so make the
+      // unavoidable sliver invisible and click-through instead.
+      if (IS_MAC) {
+        try {
+          win.setOpacity(0);
+          win.setIgnoreMouseEvents(true);
+        } catch {
+          /* ignore */
+        }
       }
     }
 
