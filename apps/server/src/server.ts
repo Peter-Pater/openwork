@@ -727,6 +727,10 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     stop: async () => {
       watcherHandle.close();
       reloadBaselineRefreshers.delete(config);
+      // Drop live WebSocket relay sockets so upgraded connections can't hang
+      // server.close() (which would wedge a restart). The relay's server is a
+      // reusable singleton, so this only closes connections, not the relay.
+      spatialStreamRelay.disconnectClients();
       await server.stop();
     },
   };

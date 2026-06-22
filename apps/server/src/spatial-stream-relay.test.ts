@@ -4,6 +4,7 @@ import { AddressInfo } from "node:net";
 import { WebSocket } from "ws";
 
 import { createSpatialStreamRelay } from "./spatial-stream-relay.js";
+import { serve } from "./serve-node.js";
 
 function makeFrame(streamId: string, payload: Uint8Array, frameType = 0): Buffer {
   const idBytes = Buffer.from(streamId, "utf8");
@@ -139,6 +140,39 @@ test("relay forwards frames from sender to subscribed receiver and ends on disco
 
     receiver.close();
   });
+});
+
+test("serve-node stop() resolves even with a live WebSocket (no restart hang)", async () => {
+  // Regression guard: persistent upgraded (WebSocket) connections from the
+  // relay must not be able to wedge a server restart. serve-node's stop() caps
+  // the wait, so it always resolves even if the OS/runtime won't let close()
+  // fire its callback while an upgraded socket lingers.
+  const relay = createSpatialStreamRelay();
+  const result = await serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response("ok"),
+    upgrade: (req, socket, head) => {
+      if (!relay.handleUpgrade(req, socket, head)) socket.destroy();
+    },
+  });
+
+  // A persistent client (like the Electron capture controller) stays connected.
+  const client = new WebSocket(`ws://127.0.0.1:${result.port}/experimental/spatial/stream`);
+  await open(client);
+  await rpc(client, "captureController", "register");
+
+  relay.disconnectClients();
+  const start = Date.now();
+  await result.stop();
+  expect(Date.now() - start).toBeLessThan(2500);
+
+  relay.close();
+  try {
+    client.terminate();
+  } catch {
+    /* ignore */
+  }
 });
 
 test("requestStartStream relays a control RPC to the capture controller", async () => {

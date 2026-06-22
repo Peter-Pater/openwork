@@ -48,6 +48,8 @@ export type SpatialStreamRelay = {
   requestStopStream(streamId: string): void;
   /** Whether at least one capture controller is currently connected. */
   hasController(): boolean;
+  /** Terminate all live sockets (keeps the server reusable across restarts). */
+  disconnectClients(): void;
   close(): void;
 };
 
@@ -207,6 +209,20 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
     },
     hasController() {
       return controllers.size > 0;
+    },
+    // Terminate all live sockets without closing the (reusable) WebSocketServer.
+    // Called on server stop/restart so upgraded sockets don't block the HTTP
+    // server's close(); the relay keeps working for the next server instance.
+    disconnectClients() {
+      for (const ws of wss.clients) {
+        try {
+          ws.terminate();
+        } catch {
+          /* ignore */
+        }
+      }
+      streams.clear();
+      controllers.clear();
     },
     close() {
       for (const ws of wss.clients) {

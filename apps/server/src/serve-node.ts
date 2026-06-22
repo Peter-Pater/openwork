@@ -229,16 +229,29 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
         stop: () => {
           if (stopPromise) return stopPromise;
           stopPromise = new Promise<void>((stopResolve, stopReject) => {
+            let settled = false;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              stopResolve();
+            };
+            // Upgraded (WebSocket) sockets can keep server.close() from ever
+            // invoking its callback on some Node versions, which would hang a
+            // server restart. Force connections shut and cap the wait so stop()
+            // always makes progress.
+            const timer = setTimeout(finish, 2000);
             server.close((error) => {
-              if (error) {
-                if (String(error).includes("ERR_SERVER_NOT_RUNNING") || String(error).includes("Server is not running")) {
-                  stopResolve();
-                  return;
-                }
+              clearTimeout(timer);
+              if (
+                error &&
+                !settled &&
+                !(String(error).includes("ERR_SERVER_NOT_RUNNING") || String(error).includes("Server is not running"))
+              ) {
+                settled = true;
                 stopReject(error);
                 return;
               }
-              stopResolve();
+              finish();
             });
             server.closeAllConnections();
           });
