@@ -11,6 +11,7 @@ import {
   googleWorkspaceTestConnection,
 } from "../extensions/google-workspace.js";
 import { callExperimentalExtensionAction, listExperimentalExtensionActions } from "../extensions/index.js";
+import { spatialStreamCoordinator } from "../spatial-stream-relay.js";
 import type { TokenService } from "../tokens.js";
 import {
   TOY_UI_CSS,
@@ -277,7 +278,11 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
       throw new ApiError(403, "forbidden", "Viewer tokens cannot call extension actions");
     }
     const body = await readJsonBody(ctx.request);
-    return jsonResponse(await callExperimentalExtensionAction(config, env, body));
+    const result = await callExperimentalExtensionAction(config, env, body);
+    // Artifact-gated XR trigger: if the agent touched a viewable Google
+    // Workspace file, start (or re-point) that session's live window stream.
+    spatialStreamCoordinator.noteExtensionCall(body, result);
+    return jsonResponse(result);
   });
 
   addRoute(routes, "GET", "/experimental/google-workspace/status", "client", async () => {

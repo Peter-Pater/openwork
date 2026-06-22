@@ -3,7 +3,12 @@ import { createServer } from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocket } from "ws";
 
-import { createSpatialStreamRelay } from "./spatial-stream-relay.js";
+import {
+  createSpatialStreamRelay,
+  createSpatialStreamCoordinator,
+  googleWorkspaceViewUrl,
+  type SpatialStreamRelay,
+} from "./spatial-stream-relay.js";
 import { serve } from "./serve-node.js";
 
 function makeFrame(streamId: string, payload: Uint8Array, frameType = 0): Buffer {
@@ -172,6 +177,81 @@ test("serve-node stop() resolves even with a live WebSocket (no restart hang)", 
     client.terminate();
   } catch {
     /* ignore */
+  }
+});
+
+test("requestUpdateStream relays a re-point control RPC to the capture controller", async () => {
+  await withRelay(async (port, relay) => {
+    const url = `ws://127.0.0.1:${port}/experimental/spatial/stream`;
+    const controller = new WebSocket(url);
+    await open(controller);
+    await rpc(controller, "captureController", "register");
+
+    const updateCall = nextJson(controller, (m) => m.params?.func === "updateStream");
+    relay.requestUpdateStream("sess-7", "https://docs.google.com/document/d/xyz/edit");
+    const msg = await updateCall;
+    expect(msg.params.target).toBe("captureController");
+    expect(msg.params.args).toEqual(["sess-7", "https://docs.google.com/document/d/xyz/edit"]);
+
+    controller.close();
+  });
+});
+
+test("googleWorkspaceViewUrl maps GWS actions to public view URLs", () => {
+  // ids from args (read/update actions)
+  expect(googleWorkspaceViewUrl("docs_update_document", { documentId: "D1" }, null)).toBe(
+    "https://docs.google.com/document/d/D1/edit",
+  );
+  expect(googleWorkspaceViewUrl("slides_read_presentation", { presentationId: "P1" }, null)).toBe(
+    "https://docs.google.com/presentation/d/P1/edit",
+  );
+  expect(googleWorkspaceViewUrl("sheets_get_values", { spreadsheetId: "S1" }, null)).toBe(
+    "https://docs.google.com/spreadsheets/d/S1/edit",
+  );
+  expect(googleWorkspaceViewUrl("drive_update_file", { fileId: "F1" }, null)).toBe(
+    "https://drive.google.com/file/d/F1/preview",
+  );
+  // id from the call result (create actions return a fresh id)
+  expect(googleWorkspaceViewUrl("docs_create_document", {}, { result: { documentId: "NEW" } })).toBe(
+    "https://docs.google.com/document/d/NEW/edit",
+  );
+  // non-file actions / missing ids → no URL
+  expect(googleWorkspaceViewUrl("calendar_create_event", { summary: "x" }, null)).toBeNull();
+  expect(googleWorkspaceViewUrl("docs_update_document", {}, null)).toBeNull();
+});
+
+test("coordinator starts on first GWS call and re-points on a doc switch", () => {
+  const calls: Array<{ kind: string; id: string; url?: string }> = [];
+  const fakeRelay = {
+    requestStartStream: (id: string, url: string) => calls.push({ kind: "start", id, url }),
+    requestUpdateStream: (id: string, url: string) => calls.push({ kind: "update", id, url }),
+    requestStopStream: (id: string) => calls.push({ kind: "stop", id }),
+  } as unknown as SpatialStreamRelay;
+
+  const coordinator = createSpatialStreamCoordinator(fakeRelay);
+  try {
+    const body = (action: string, args: Record<string, unknown>) => ({
+      extensionId: "google-workspace",
+      action,
+      args,
+      context: { sessionId: "sess-1" },
+    });
+
+    // First doc → start.
+    coordinator.noteExtensionCall(body("docs_update_document", { documentId: "A" }), null);
+    // Same doc again → idempotent, no new call.
+    coordinator.noteExtensionCall(body("docs_read_document", { documentId: "A" }), null);
+    // Different doc → re-point (not a second start).
+    coordinator.noteExtensionCall(body("docs_update_document", { documentId: "B" }), null);
+    // Non-GWS / no sessionId → ignored.
+    coordinator.noteExtensionCall({ extensionId: "other", action: "x", args: {}, context: {} }, null);
+
+    expect(calls).toEqual([
+      { kind: "start", id: "sess-1", url: "https://docs.google.com/document/d/A/edit" },
+      { kind: "update", id: "sess-1", url: "https://docs.google.com/document/d/B/edit" },
+    ]);
+  } finally {
+    coordinator.dispose();
   }
 });
 

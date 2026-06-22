@@ -44,6 +44,8 @@ export type SpatialStreamRelay = {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean;
   /** Ask the connected capture controller(s) to open + stream a window. */
   requestStartStream(streamId: string, url: string): void;
+  /** Ask the connected capture controller(s) to re-point an open window's URL. */
+  requestUpdateStream(streamId: string, url: string): void;
   /** Ask the connected capture controller(s) to stop + close a window. */
   requestStopStream(streamId: string): void;
   /** Whether at least one capture controller is currently connected. */
@@ -202,6 +204,11 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
         call(controller, "captureController", "startStream", [streamId, url]);
       }
     },
+    requestUpdateStream(streamId, url) {
+      for (const controller of controllers) {
+        call(controller, "captureController", "updateStream", [streamId, url]);
+      }
+    },
     requestStopStream(streamId) {
       for (const controller of controllers) {
         call(controller, "captureController", "stopStream", [streamId]);
@@ -247,11 +254,59 @@ export type SpatialStreamCoordinator = {
    * streaming its visualization. Idempotent per session.
    */
   noteSessionDoc(sessionId: string, fileId: string): void;
+  /**
+   * Record that a session is viewing/working on a specific URL. Starts the
+   * stream if not already running; re-points the existing window (keeping the
+   * same panel) if the URL changed — i.e. the agent switched documents.
+   */
+  noteSessionUrl(sessionId: string, url: string): void;
+  /**
+   * Inspect a completed `openwork_extension_call` and, if it touched a viewable
+   * Google Workspace artifact, start/re-point that session's stream. This is the
+   * general trigger: it fires for desktop-prompted sessions too, not just XR
+   * drops. `body` is the request payload (`{ extensionId, action, args, context
+   * }`); `callResult` is the action's return value (carries created file ids).
+   */
+  noteExtensionCall(body: unknown, callResult: unknown): void;
   dispose(): void;
 };
 
 function googleDocUrl(fileId: string): string {
   return `https://docs.google.com/document/d/${encodeURIComponent(fileId)}/edit`;
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Map a Google Workspace extension action + its args/result to the public
+ * "anyone with the link" view URL for the artifact it touched, or null if the
+ * action isn't tied to a viewable file. Reads the id from args first (read/
+ * update actions) then from the call result (create actions return a new id).
+ */
+export function googleWorkspaceViewUrl(action: string, args: unknown, callResult: unknown): string | null {
+  const fromArgsOrResult = (key: string): string => {
+    const fromArgs = args && typeof args === "object" ? asString((args as Record<string, unknown>)[key]) : "";
+    if (fromArgs) return fromArgs;
+    const result = callResult && typeof callResult === "object" ? (callResult as Record<string, unknown>).result : undefined;
+    return result && typeof result === "object" ? asString((result as Record<string, unknown>)[key]) : "";
+  };
+  const a = action || "";
+  if (a.startsWith("docs_")) {
+    const id = fromArgsOrResult("documentId");
+    if (id) return googleDocUrl(id);
+  } else if (a.startsWith("slides_")) {
+    const id = fromArgsOrResult("presentationId");
+    if (id) return `https://docs.google.com/presentation/d/${encodeURIComponent(id)}/edit`;
+  } else if (a.startsWith("sheets_")) {
+    const id = fromArgsOrResult("spreadsheetId");
+    if (id) return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit`;
+  } else if (a.startsWith("drive_")) {
+    const id = fromArgsOrResult("fileId");
+    if (id) return `https://drive.google.com/file/d/${encodeURIComponent(id)}/preview`;
+  }
+  return null;
 }
 
 /**
@@ -260,15 +315,27 @@ function googleDocUrl(fileId: string): string {
  * viewable artifact (a Doc), so no-artifact tasks never open a window.
  */
 export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): SpatialStreamCoordinator {
-  const docBySession = new Map<string, string>(); // sessionId -> fileId
+  const urlBySession = new Map<string, string>(); // sessionId -> current view URL
   const streaming = new Set<string>(); // sessionIds with a live stream request
   const sawBusy = new Set<string>(); // sessionIds observed busy since last note
 
   function startIfReady(sessionId: string): void {
-    const fileId = docBySession.get(sessionId);
-    if (!fileId || streaming.has(sessionId)) return;
+    const url = urlBySession.get(sessionId);
+    if (!url || streaming.has(sessionId)) return;
     streaming.add(sessionId);
-    relay.requestStartStream(sessionId, googleDocUrl(fileId));
+    relay.requestStartStream(sessionId, url);
+  }
+
+  function noteSessionUrl(sessionId: string, url: string): void {
+    if (!sessionId || !url) return;
+    const previous = urlBySession.get(sessionId);
+    urlBySession.set(sessionId, url);
+    if (streaming.has(sessionId)) {
+      // Doc switch mid-session: re-point the open window, keep the same panel.
+      if (previous !== url) relay.requestUpdateStream(sessionId, url);
+    } else {
+      startIfReady(sessionId); // optimistic head start (don't wait for "busy")
+    }
   }
 
   function stop(sessionId: string): void {
@@ -283,7 +350,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
     if (!sessionId) return;
 
     if (event.action === "deleted") {
-      docBySession.delete(sessionId);
+      urlBySession.delete(sessionId);
       sawBusy.delete(sessionId);
       stop(sessionId);
       return;
@@ -298,7 +365,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       // "idle" poll right after a drop doesn't kill the optimistic stream.
       if (sawBusy.has(sessionId)) {
         sawBusy.delete(sessionId);
-        docBySession.delete(sessionId);
+        urlBySession.delete(sessionId);
         stop(sessionId);
       }
     }
@@ -309,8 +376,18 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
   return {
     noteSessionDoc(sessionId, fileId) {
       if (!sessionId || !fileId) return;
-      docBySession.set(sessionId, fileId);
-      startIfReady(sessionId); // optimistic head start (don't wait for "busy")
+      noteSessionUrl(sessionId, googleDocUrl(fileId));
+    },
+    noteSessionUrl,
+    noteExtensionCall(body, callResult) {
+      if (!body || typeof body !== "object") return;
+      const b = body as Record<string, unknown>;
+      if (asString(b.extensionId) !== "google-workspace") return;
+      const context = b.context && typeof b.context === "object" ? (b.context as Record<string, unknown>) : {};
+      const sessionId = asString(context.sessionId);
+      if (!sessionId) return;
+      const url = googleWorkspaceViewUrl(asString(b.action), b.args, callResult);
+      if (url) noteSessionUrl(sessionId, url);
     },
     dispose() {
       spatialEventsBroker.removeListener(listener);

@@ -120,6 +120,8 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     const args = Array.isArray(params.args) ? params.args : [];
     if (params.func === "startStream") {
       void startStream(String(args[0] ?? ""), String(args[1] ?? ""));
+    } else if (params.func === "updateStream") {
+      void updateStream(String(args[0] ?? ""), String(args[1] ?? ""));
     } else if (params.func === "stopStream") {
       stopStream(String(args[0] ?? ""));
     }
@@ -222,6 +224,24 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       console.log(`[spatial-capture] streaming session ${sessionId} → ${url}`);
     } catch (e) {
       console.warn(`[spatial-capture] startScreencast failed for ${sessionId}:`, e?.message ?? e);
+    }
+  }
+
+  // Re-point an already-open capture window at a new URL (agent switched docs).
+  // The screencast keeps running on the same webContents, so the XR panel stays
+  // mounted and just shows the new page — no stream restart, no panel flicker.
+  async function updateStream(sessionId, url) {
+    if (!url) return;
+    const entry = sessions.get(sessionId);
+    if (!entry) {
+      void startStream(sessionId, url);
+      return;
+    }
+    try {
+      await entry.win.webContents.loadURL(url);
+      console.log(`[spatial-capture] re-pointed session ${sessionId} → ${url}`);
+    } catch (e) {
+      console.warn(`[spatial-capture] updateStream loadURL failed for ${sessionId}:`, e?.message ?? e);
     }
   }
 
