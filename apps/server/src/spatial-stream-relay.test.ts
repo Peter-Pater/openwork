@@ -9,6 +9,7 @@ import {
   googleWorkspaceViewUrl,
   type SpatialStreamRelay,
 } from "./spatial-stream-relay.js";
+import { spatialEventsBroker } from "./events.js";
 import { serve } from "./serve-node.js";
 
 function makeFrame(streamId: string, payload: Uint8Array, frameType = 0): Buffer {
@@ -221,11 +222,11 @@ test("googleWorkspaceViewUrl maps GWS actions to public view URLs", () => {
 });
 
 test("coordinator starts on first GWS call and re-points on a doc switch", () => {
-  const calls: Array<{ kind: string; id: string; url?: string }> = [];
+  const calls: Array<{ op: string; id: string; target?: unknown; url?: string }> = [];
   const fakeRelay = {
-    requestStartStream: (id: string, url: string) => calls.push({ kind: "start", id, url }),
-    requestUpdateStream: (id: string, url: string) => calls.push({ kind: "update", id, url }),
-    requestStopStream: (id: string) => calls.push({ kind: "stop", id }),
+    requestStartStream: (id: string, target: unknown) => calls.push({ op: "start", id, target }),
+    requestUpdateStream: (id: string, url: string) => calls.push({ op: "update", id, url }),
+    requestStopStream: (id: string) => calls.push({ op: "stop", id }),
   } as unknown as SpatialStreamRelay;
 
   const coordinator = createSpatialStreamCoordinator(fakeRelay);
@@ -247,9 +248,40 @@ test("coordinator starts on first GWS call and re-points on a doc switch", () =>
     coordinator.noteExtensionCall({ extensionId: "other", action: "x", args: {}, context: {} }, null);
 
     expect(calls).toEqual([
-      { kind: "start", id: "sess-1", url: "https://docs.google.com/document/d/A/edit" },
-      { kind: "update", id: "sess-1", url: "https://docs.google.com/document/d/B/edit" },
+      { op: "start", id: "sess-1", target: { kind: "browser", url: "https://docs.google.com/document/d/A/edit" } },
+      { op: "update", id: "sess-1", url: "https://docs.google.com/document/d/B/edit" },
     ]);
+  } finally {
+    coordinator.dispose();
+  }
+});
+
+test("coordinator streams the screen for a computer-use session and ignores GWS downgrade", () => {
+  const calls: Array<{ op: string; id: string; target?: unknown }> = [];
+  const fakeRelay = {
+    requestStartStream: (id: string, target: unknown) => calls.push({ op: "start", id, target }),
+    requestUpdateStream: () => calls.push({ op: "update", id: "" }),
+    requestStopStream: (id: string) => calls.push({ op: "stop", id }),
+  } as unknown as SpatialStreamRelay;
+
+  const coordinator = createSpatialStreamCoordinator(fakeRelay);
+  try {
+    const part = (tool: string) => ({
+      type: "message.part.updated",
+      properties: { part: { type: "tool", tool, sessionID: "cu-1" } },
+    });
+
+    // First computer-use tool part → screen stream starts.
+    spatialEventsBroker.emit(part("computer-use_snapshot"));
+    // More computer-use parts → idempotent (already streaming screen).
+    spatialEventsBroker.emit(part("computer-use_click"));
+    spatialEventsBroker.emit(part("cua_screenshot"));
+    // A GWS call on the same session must NOT downgrade the screen to a browser.
+    coordinator.noteSessionUrl("cu-1", "https://docs.google.com/document/d/Z/edit");
+    // A non-computer-use tool part is ignored.
+    spatialEventsBroker.emit(part("read"));
+
+    expect(calls).toEqual([{ op: "start", id: "cu-1", target: { kind: "screen" } }]);
   } finally {
     coordinator.dispose();
   }
@@ -263,10 +295,10 @@ test("requestStartStream relays a control RPC to the capture controller", async 
     await rpc(controller, "captureController", "register");
 
     const startCall = nextJson(controller, (m) => m.params?.func === "startStream");
-    relay.requestStartStream("sess-42", "https://docs.google.com/document/d/abc/edit");
+    relay.requestStartStream("sess-42", { kind: "browser", url: "https://docs.google.com/document/d/abc/edit" });
     const msg = await startCall;
     expect(msg.params.target).toBe("captureController");
-    expect(msg.params.args).toEqual(["sess-42", "https://docs.google.com/document/d/abc/edit"]);
+    expect(msg.params.args).toEqual(["sess-42", { kind: "browser", url: "https://docs.google.com/document/d/abc/edit" }]);
 
     controller.close();
   });

@@ -1,19 +1,33 @@
 // Spatial stream capture controller (XR "virtual screens", sender side).
 //
 // Connects to the OpenWork server's WebSocket relay as the "capture
-// controller". When the server-side coordinator asks for a session's window
-// (startStream), we open a hidden BrowserWindow at the Doc URL, attach the
-// in-process CDP debugger, and stream JPEG frames via Page.startScreencast to
-// the relay. The XR client subscribes and renders them on the agent's avatar.
+// controller". When the server-side coordinator asks for a session's stream
+// (startStream with a target), we capture frames and relay JPEG to the server;
+// the XR client subscribes and renders them on the agent's avatar.
+//
+// Two capture backends, chosen by target.kind:
+//   - "browser": open a hidden BrowserWindow at a URL (GWS docs) and screencast
+//     it via the in-process CDP debugger (Page.startScreencast).
+//   - "screen":  capture the primary display for a computer-use session, via a
+//     hidden renderer running desktopCapturer+getUserMedia → canvas → JPEG
+//     (see spatial-capture-preload.cjs). CDP can't see the OS desktop, so this
+//     path uses a renderer instead.
 //
 // Frame protocol (matches the relay + xrblocks virtual_screens receiver):
 //   [uint8 streamIdLen][streamId][uint8 frameType][JPEG bytes]
 // JSON-RPC control: { params: { target, func, args } } / replies { id, result }.
-import { BrowserWindow } from "electron";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { BrowserWindow, desktopCapturer, ipcMain, screen as electronScreen, systemPreferences } from "electron";
 import { WebSocket } from "ws";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const STREAM_PATH = "/experimental/spatial/stream";
 const RECONNECT_MS = 2000;
+const SCREEN_FPS = 12; // capture frame rate for computer-use screen streams
+const SCREEN_MAX_WIDTH = 1280; // downscale the display to at most this width
 // Capture windows are hidden + parked off-screen by default. Set
 // OPENWORK_SPATIAL_SHOW_CAPTURE=1 to show them on-screen (debugging / a
 // fallback if a platform throttles screencast for hidden windows).
@@ -119,12 +133,23 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     if (!params || params.target !== "captureController") return;
     const args = Array.isArray(params.args) ? params.args : [];
     if (params.func === "startStream") {
-      void startStream(String(args[0] ?? ""), String(args[1] ?? ""));
+      void startStream(String(args[0] ?? ""), normalizeTarget(args[1]));
     } else if (params.func === "updateStream") {
       void updateStream(String(args[0] ?? ""), String(args[1] ?? ""));
     } else if (params.func === "stopStream") {
       stopStream(String(args[0] ?? ""));
     }
+  }
+
+  // The relay forwards whatever target the coordinator sent. Accept both the
+  // new `{ kind, url? }` object and a bare URL string (legacy/browser).
+  function normalizeTarget(raw) {
+    if (typeof raw === "string") return raw ? { kind: "browser", url: raw } : null;
+    if (raw && typeof raw === "object" && typeof raw.kind === "string") {
+      if (raw.kind === "browser") return raw.url ? { kind: "browser", url: String(raw.url) } : null;
+      if (raw.kind === "screen") return { kind: "screen" };
+    }
+    return null;
   }
 
   function sendFrame(sessionId, jpeg) {
@@ -141,7 +166,24 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     }
   }
 
-  async function startStream(sessionId, url) {
+  // Dispatch a start request to the right capture backend. A startStream for an
+  // already-active session means the target kind changed (same-kind updates come
+  // via updateStream), so tear down the old capture first.
+  async function startStream(sessionId, target) {
+    if (!sessionId || !target) return;
+    const existing = sessions.get(sessionId);
+    if (existing) {
+      if (existing.kind === target.kind && target.kind === "browser") return;
+      stopStream(sessionId);
+    }
+    if (target.kind === "screen") {
+      await startScreenStream(sessionId);
+    } else if (target.kind === "browser") {
+      await startBrowserStream(sessionId, target.url);
+    }
+  }
+
+  async function startBrowserStream(sessionId, url) {
     if (!sessionId || !url || sessions.has(sessionId)) return;
 
     const win = new BrowserWindow({
@@ -152,7 +194,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       skipTaskbar: !SHOW_CAPTURE,
       webPreferences: { backgroundThrottling: false, offscreen: false },
     });
-    const entry = { win, dbg: null, started: false };
+    const entry = { win, kind: "browser", dbg: null, started: false };
     sessions.set(sessionId, entry);
 
     try {
@@ -227,6 +269,78 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     }
   }
 
+  // Computer-use screen capture. CDP can't see the OS desktop, so we drive a
+  // hidden renderer (spatial-capture-preload.cjs) that grabs the primary display
+  // via desktopCapturer+getUserMedia and posts JPEG frames back over IPC.
+  async function startScreenStream(sessionId) {
+    if (IS_MAC && systemPreferences.getMediaAccessStatus?.("screen") !== "granted") {
+      console.warn(
+        "[spatial-capture] Screen Recording permission not granted to OpenWork — the screen stream may be blank. " +
+          "Grant it in System Settings → Privacy & Security → Screen Recording.",
+      );
+    }
+    try {
+      const primary = electronScreen.getPrimaryDisplay();
+      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+      const source = sources.find((s) => String(s.display_id) === String(primary.id)) ?? sources[0] ?? null;
+      if (!source) {
+        console.warn(`[spatial-capture] no screen source available for ${sessionId}`);
+        return;
+      }
+      const { width: dw, height: dh } = primary.size ?? { width: 0, height: 0 };
+      const maxWidth = Math.min(dw || SCREEN_MAX_WIDTH, SCREEN_MAX_WIDTH);
+      const maxHeight = dw ? Math.round(maxWidth * (dh / dw)) : 800;
+
+      const win = new BrowserWindow({
+        show: false,
+        width: 320,
+        height: 240,
+        skipTaskbar: true,
+        webPreferences: {
+          preload: path.join(__dirname, "spatial-capture-preload.cjs"),
+          sandbox: false,
+          contextIsolation: true,
+          nodeIntegration: false,
+          backgroundThrottling: false,
+          offscreen: false,
+        },
+      });
+      const entry = { win, kind: "screen", dbg: null, started: false };
+      sessions.set(sessionId, entry);
+
+      // Wait for the renderer (and its preload) before asking it to capture.
+      await win.webContents.loadURL("about:blank");
+      if (win.isDestroyed()) return; // stopped while loading
+      win.webContents.send("spatial-capture-start", {
+        sessionId,
+        sourceId: source.id,
+        fps: SCREEN_FPS,
+        maxWidth,
+        maxHeight,
+        quality: 0.6,
+      });
+      console.log(`[spatial-capture] streaming screen for session ${sessionId} (${maxWidth}x${maxHeight})`);
+    } catch (e) {
+      console.warn(`[spatial-capture] startScreenStream failed for ${sessionId}:`, e?.message ?? e);
+      stopStream(sessionId);
+    }
+  }
+
+  // JPEG frames posted by the screen-capture renderer over IPC.
+  function onScreenFrame(_event, payload) {
+    if (!payload) return;
+    const sessionId = String(payload.sessionId ?? "");
+    const entry = sessions.get(sessionId);
+    if (!entry || entry.kind !== "screen" || !payload.data) return;
+    if (!entry.started) {
+      entry.started = true;
+      const width = Math.round(payload.width || SCREEN_MAX_WIDTH);
+      const height = Math.round(payload.height || 800);
+      rpc("streamManager", "start_stream", [sessionId, { width, height }]);
+    }
+    sendFrame(sessionId, Buffer.from(payload.data));
+  }
+
   // Re-point an already-open capture window at a new URL (agent switched docs).
   // The screencast keeps running on the same webContents, so the XR panel stays
   // mounted and just shows the new page — no stream restart, no panel flicker.
@@ -234,9 +348,10 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     if (!url) return;
     const entry = sessions.get(sessionId);
     if (!entry) {
-      void startStream(sessionId, url);
+      void startStream(sessionId, { kind: "browser", url });
       return;
     }
+    if (entry.kind !== "browser") return; // screen streams have no URL to re-point
     try {
       await entry.win.webContents.loadURL(url);
       console.log(`[spatial-capture] re-pointed session ${sessionId} → ${url}`);
@@ -250,15 +365,23 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     if (!entry) return;
     sessions.delete(sessionId);
     rpc("streamManager", "stop_stream", [sessionId]);
-    try {
-      entry.dbg?.sendCommand("Page.stopScreencast").catch(() => {});
-    } catch {
-      /* ignore */
-    }
-    try {
-      if (entry.dbg?.isAttached()) entry.dbg.detach();
-    } catch {
-      /* ignore */
+    if (entry.kind === "browser") {
+      try {
+        entry.dbg?.sendCommand("Page.stopScreencast").catch(() => {});
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (entry.dbg?.isAttached()) entry.dbg.detach();
+      } catch {
+        /* ignore */
+      }
+    } else if (entry.kind === "screen") {
+      try {
+        if (!entry.win.isDestroyed()) entry.win.webContents.send("spatial-capture-stop");
+      } catch {
+        /* ignore */
+      }
     }
     try {
       if (!entry.win.isDestroyed()) entry.win.destroy();
@@ -270,6 +393,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
 
   return {
     start() {
+      ipcMain.on("spatial-capture-frame", onScreenFrame);
       void connect();
     },
     stop() {
@@ -278,6 +402,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      ipcMain.removeListener("spatial-capture-frame", onScreenFrame);
       for (const id of [...sessions.keys()]) stopStream(id);
       try {
         ws?.close();

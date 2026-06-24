@@ -30,6 +30,15 @@ export const SPATIAL_STREAM_PATH = "/experimental/spatial/stream";
 
 type StreamInfo = { width: number; height: number };
 
+/**
+ * What a session's stream should show. The capture controller branches on
+ * `kind`: `browser` opens a hidden BrowserWindow at `url` (GWS artifacts);
+ * `screen` captures the primary display (computer-use sessions). Adding a
+ * `window` kind later (focused-app capture) is a drop-in third case — the
+ * relay, wire protocol, and XR receiver are all kind-agnostic.
+ */
+export type SpatialStreamTarget = { kind: "browser"; url: string } | { kind: "screen" };
+
 type StreamEntry = {
   info: StreamInfo;
   sender: WebSocket | null;
@@ -42,8 +51,8 @@ export type SpatialStreamRelay = {
    * endpoint (and was taken over), false otherwise (caller should destroy).
    */
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean;
-  /** Ask the connected capture controller(s) to open + stream a window. */
-  requestStartStream(streamId: string, url: string): void;
+  /** Ask the connected capture controller(s) to open + stream a target. */
+  requestStartStream(streamId: string, target: SpatialStreamTarget): void;
   /** Ask the connected capture controller(s) to re-point an open window's URL. */
   requestUpdateStream(streamId: string, url: string): void;
   /** Ask the connected capture controller(s) to stop + close a window. */
@@ -199,9 +208,9 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
       });
       return true;
     },
-    requestStartStream(streamId, url) {
+    requestStartStream(streamId, target) {
       for (const controller of controllers) {
-        call(controller, "captureController", "startStream", [streamId, url]);
+        call(controller, "captureController", "startStream", [streamId, target]);
       }
     },
     requestUpdateStream(streamId, url) {
@@ -268,6 +277,13 @@ export type SpatialStreamCoordinator = {
    * }`); `callResult` is the action's return value (carries created file ids).
    */
   noteExtensionCall(body: unknown, callResult: unknown): void;
+  /**
+   * Record that a session is driving the machine via computer-use and stream its
+   * (primary display) screen. Idempotent — safe to call on every computer-use
+   * tool part. Screen capture is comprehensive, so it takes precedence over a
+   * browser-URL stream for the same session.
+   */
+  noteSessionComputerUse(sessionId: string): void;
   dispose(): void;
 };
 
@@ -310,32 +326,62 @@ export function googleWorkspaceViewUrl(action: string, args: unknown, callResult
 }
 
 /**
+ * True if a tool name is a `computer-use` MCP tool. opencode namespaces MCP
+ * tools with the server name ("computer-use"); we tolerate whatever separator
+ * it sanitizes to (`computer-use_`, `computer_use_`, …) and also accept the
+ * unambiguous `cua_*` compatibility tools in case the namespace is dropped.
+ */
+export function isComputerUseTool(toolName: unknown): boolean {
+  if (typeof toolName !== "string") return false;
+  return /computer[-_]?use[-_]/i.test(toolName) || /^cua_/i.test(toolName);
+}
+
+/**
  * Subscribes to `spatialEventsBroker` and maps session lifecycle → stream
  * lifecycle. A stream is only ever started for a session we know is working on a
  * viewable artifact (a Doc), so no-artifact tasks never open a window.
  */
 export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): SpatialStreamCoordinator {
-  const urlBySession = new Map<string, string>(); // sessionId -> current view URL
+  const targetBySession = new Map<string, SpatialStreamTarget>(); // sessionId -> what to show
   const streaming = new Set<string>(); // sessionIds with a live stream request
   const sawBusy = new Set<string>(); // sessionIds observed busy since last note
 
   function startIfReady(sessionId: string): void {
-    const url = urlBySession.get(sessionId);
-    if (!url || streaming.has(sessionId)) return;
+    const target = targetBySession.get(sessionId);
+    if (!target || streaming.has(sessionId)) return;
     streaming.add(sessionId);
-    relay.requestStartStream(sessionId, url);
+    relay.requestStartStream(sessionId, target);
+  }
+
+  function noteSessionTarget(sessionId: string, target: SpatialStreamTarget): void {
+    if (!sessionId || !target) return;
+    const previous = targetBySession.get(sessionId);
+    // Computer-use screen capture shows everything (any browser the agent opens
+    // included), so never downgrade an active screen stream to a browser URL.
+    if (previous?.kind === "screen" && target.kind === "browser") return;
+
+    targetBySession.set(sessionId, target);
+
+    if (!streaming.has(sessionId)) {
+      startIfReady(sessionId); // optimistic head start (don't wait for "busy")
+      return;
+    }
+    if (previous && previous.kind === target.kind) {
+      // Doc switch mid-session: re-point the open window, keep the same panel.
+      if (target.kind === "browser" && previous.kind === "browser" && previous.url !== target.url) {
+        relay.requestUpdateStream(sessionId, target.url);
+      }
+      // screen → screen: nothing changes.
+    } else {
+      // Kind changed (e.g. browser → screen): restart; the capture controller
+      // tears down the old window/renderer when it gets a new startStream.
+      relay.requestStartStream(sessionId, target);
+    }
   }
 
   function noteSessionUrl(sessionId: string, url: string): void {
     if (!sessionId || !url) return;
-    const previous = urlBySession.get(sessionId);
-    urlBySession.set(sessionId, url);
-    if (streaming.has(sessionId)) {
-      // Doc switch mid-session: re-point the open window, keep the same panel.
-      if (previous !== url) relay.requestUpdateStream(sessionId, url);
-    } else {
-      startIfReady(sessionId); // optimistic head start (don't wait for "busy")
-    }
+    noteSessionTarget(sessionId, { kind: "browser", url });
   }
 
   function stop(sessionId: string): void {
@@ -345,12 +391,22 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
   }
 
   const listener = (event: any) => {
+    // Computer-use detection: any computer-use MCP tool part means the session
+    // is driving the machine — stream its screen.
+    if (event?.type === "message.part.updated") {
+      const part = event.properties?.part ?? event.part;
+      if (part?.type === "tool" && isComputerUseTool(part.tool) && part.sessionID) {
+        noteSessionTarget(part.sessionID, { kind: "screen" });
+      }
+      return;
+    }
+
     if (event?.type !== "session_changed") return;
     const sessionId: string | undefined = event.sessionId;
     if (!sessionId) return;
 
     if (event.action === "deleted") {
-      urlBySession.delete(sessionId);
+      targetBySession.delete(sessionId);
       sawBusy.delete(sessionId);
       stop(sessionId);
       return;
@@ -365,7 +421,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       // "idle" poll right after a drop doesn't kill the optimistic stream.
       if (sawBusy.has(sessionId)) {
         sawBusy.delete(sessionId);
-        urlBySession.delete(sessionId);
+        targetBySession.delete(sessionId);
         stop(sessionId);
       }
     }
@@ -388,6 +444,10 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       if (!sessionId) return;
       const url = googleWorkspaceViewUrl(asString(b.action), b.args, callResult);
       if (url) noteSessionUrl(sessionId, url);
+    },
+    noteSessionComputerUse(sessionId) {
+      if (!sessionId) return;
+      noteSessionTarget(sessionId, { kind: "screen" });
     },
     dispose() {
       spatialEventsBroker.removeListener(listener);
