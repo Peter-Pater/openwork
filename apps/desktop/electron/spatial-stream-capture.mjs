@@ -19,7 +19,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BrowserWindow, desktopCapturer, ipcMain, screen as electronScreen, systemPreferences } from "electron";
+import { BrowserWindow, desktopCapturer, ipcMain, screen as electronScreen, shell, systemPreferences } from "electron";
 import { WebSocket } from "ws";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,18 @@ const STREAM_PATH = "/experimental/spatial/stream";
 const RECONNECT_MS = 2000;
 const SCREEN_FPS = 12; // capture frame rate for computer-use screen streams
 const SCREEN_MAX_WIDTH = 1280; // downscale the display to at most this width
+// Isolated in-memory session for the capture windows, so the permission +
+// display-media handlers we install don't touch the app's other sessions.
+const SCREEN_PARTITION = "spatial-screen-capture";
+
+function openScreenRecordingSettings() {
+  if (process.platform !== "darwin") return;
+  try {
+    void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+  } catch {
+    /* ignore */
+  }
+}
 // Capture windows are hidden + parked off-screen by default. Set
 // OPENWORK_SPATIAL_SHOW_CAPTURE=1 to show them on-screen (debugging / a
 // fallback if a platform throttles screencast for hidden windows).
@@ -44,6 +56,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
   let ws = null;
   let reconnectTimer = null;
   let disposed = false;
+  let screenSettingsOpened = false; // open the macOS settings pane at most once
   const sessions = new Map(); // sessionId -> { win, dbg, started }
 
   async function resolveWsUrl() {
@@ -273,20 +286,12 @@ export function createSpatialStreamCapture({ getServerUrl }) {
   // hidden renderer (spatial-capture-preload.cjs) that grabs the primary display
   // via desktopCapturer+getUserMedia and posts JPEG frames back over IPC.
   async function startScreenStream(sessionId) {
-    if (IS_MAC && systemPreferences.getMediaAccessStatus?.("screen") !== "granted") {
-      console.warn(
-        "[spatial-capture] Screen Recording permission not granted to OpenWork — the screen stream may be blank. " +
-          "Grant it in System Settings → Privacy & Security → Screen Recording.",
-      );
+    if (IS_MAC) {
+      const status = systemPreferences.getMediaAccessStatus?.("screen");
+      console.log(`[spatial-capture] macOS screen-recording status: ${status}`);
     }
     try {
       const primary = electronScreen.getPrimaryDisplay();
-      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
-      const source = sources.find((s) => String(s.display_id) === String(primary.id)) ?? sources[0] ?? null;
-      if (!source) {
-        console.warn(`[spatial-capture] no screen source available for ${sessionId}`);
-        return;
-      }
       const { width: dw, height: dh } = primary.size ?? { width: 0, height: 0 };
       const maxWidth = Math.min(dw || SCREEN_MAX_WIDTH, SCREEN_MAX_WIDTH);
       const maxHeight = dw ? Math.round(maxWidth * (dh / dw)) : 800;
@@ -305,18 +310,38 @@ export function createSpatialStreamCapture({ getServerUrl }) {
           nodeIntegration: false,
           backgroundThrottling: false,
           offscreen: false,
+          partition: SCREEN_PARTITION,
         },
       });
       const entry = { win, kind: "screen", dbg: null, started: false };
       sessions.set(sessionId, entry);
 
-      // Load over file:// (a secure context — required for getUserMedia to be
+      // Use Electron's supported screen-capture flow: getDisplayMedia in the
+      // renderer, with main supplying the primary display (no picker) and
+      // granting the request. This both authorizes the capture at the Chromium
+      // layer and engages the macOS Screen Recording permission properly.
+      const ses = win.webContents.session;
+      ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+      ses.setDisplayMediaRequestHandler(
+        async (_request, callback) => {
+          try {
+            const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
+            const source = sources.find((s) => String(s.display_id) === String(primary.id)) ?? sources[0] ?? null;
+            callback(source ? { video: source } : undefined);
+          } catch (e) {
+            console.warn(`[spatial-capture] getSources failed for ${sessionId}:`, e?.message ?? e);
+            callback();
+          }
+        },
+        { useSystemPicker: false },
+      );
+
+      // Load over file:// (a secure context — required for getDisplayMedia to be
       // exposed) and wait for the preload before asking it to capture.
       await win.webContents.loadFile(path.join(__dirname, "spatial-capture.html"));
       if (win.isDestroyed()) return; // stopped while loading
       win.webContents.send("spatial-capture-start", {
         sessionId,
-        sourceId: source.id,
         fps: SCREEN_FPS,
         maxWidth,
         maxHeight,
@@ -345,12 +370,20 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     sendFrame(sessionId, Buffer.from(payload.data));
   }
 
-  // Surface getUserMedia / permission failures from the hidden capture renderer
-  // (otherwise they'd be invisible — the renderer has no devtools open).
+  // Surface getDisplayMedia / permission failures from the hidden capture
+  // renderer (otherwise they'd be invisible — the renderer has no devtools).
   function onScreenError(_event, payload) {
-    console.warn(
-      `[spatial-capture] screen-capture renderer error for session ${payload?.sessionId ?? "?"}: ${payload?.error ?? "unknown"}`,
-    );
+    const error = String(payload?.error ?? "unknown");
+    console.warn(`[spatial-capture] screen-capture renderer error for session ${payload?.sessionId ?? "?"}: ${error}`);
+    // A permission denial on macOS has no interactive prompt — jump the user to
+    // the Screen Recording settings pane so they can grant it (once per run).
+    if (IS_MAC && /denied|not.?allowed|permission/i.test(error) && !screenSettingsOpened) {
+      screenSettingsOpened = true;
+      console.warn(
+        "[spatial-capture] Opening Screen Recording settings — enable OpenWork (dev: 'Electron'), then fully quit and relaunch.",
+      );
+      openScreenRecordingSettings();
+    }
   }
 
   // Re-point an already-open capture window at a new URL (agent switched docs).

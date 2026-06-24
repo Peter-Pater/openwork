@@ -37,7 +37,7 @@ function stopCapture() {
   ctx = null;
 }
 
-async function startCapture({ sessionId, sourceId, fps, maxWidth, maxHeight, quality }) {
+async function startCapture({ sessionId, fps, maxWidth, maxHeight, quality }) {
   stopCapture();
   const frameRate = Math.max(1, Math.min(Number(fps) || 12, 30));
   const w = Math.max(160, Math.round(Number(maxWidth) || 1280));
@@ -45,20 +45,13 @@ async function startCapture({ sessionId, sourceId, fps, maxWidth, maxHeight, qua
   const jpegQuality = Math.min(Math.max(Number(quality) || 0.6, 0.1), 0.95);
 
   try {
-    // Electron's desktop-capture constraints (the older `mandatory` form is the
-    // reliable way to pin a specific source id).
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        mandatory: {
-          chromeMediaSource: "desktop",
-          chromeMediaSourceId: sourceId,
-          maxWidth: w,
-          maxHeight: h,
-          maxFrameRate: frameRate,
-        },
-      },
-    });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      throw new Error("navigator.mediaDevices.getDisplayMedia unavailable");
+    }
+    // Main has installed a display-media request handler that supplies the
+    // primary display (no picker) and grants the request, so this resolves
+    // directly to the screen's MediaStream.
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate }, audio: false });
   } catch (e) {
     ipcRenderer.send("spatial-capture-error", { sessionId, error: String(e && e.message ? e.message : e) });
     return;
