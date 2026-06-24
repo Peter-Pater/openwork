@@ -390,13 +390,23 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
     relay.requestStopStream(sessionId);
   }
 
+  const seenToolNames = new Set<string>(); // diagnostic: log each distinct tool name once
+
   const listener = (event: any) => {
     // Computer-use detection: any computer-use MCP tool part means the session
     // is driving the machine — stream its screen.
     if (event?.type === "message.part.updated") {
       const part = event.properties?.part ?? event.part;
-      if (part?.type === "tool" && isComputerUseTool(part.tool) && part.sessionID) {
-        noteSessionTarget(part.sessionID, { kind: "screen" });
+      if (part?.type === "tool" && typeof part.tool === "string") {
+        // Diagnostic: reveals the exact tool name opencode emits, so we can see
+        // whether `isComputerUseTool` matches the real computer-use tool names.
+        if (!seenToolNames.has(part.tool)) {
+          seenToolNames.add(part.tool);
+          console.log(`[spatial-coordinator] tool part: "${part.tool}" (computer-use match: ${isComputerUseTool(part.tool)})`);
+        }
+        if (part.sessionID && isComputerUseTool(part.tool)) {
+          noteSessionTarget(part.sessionID, { kind: "screen" });
+        }
       }
       return;
     }

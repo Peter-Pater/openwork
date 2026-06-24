@@ -337,8 +337,17 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       const width = Math.round(payload.width || SCREEN_MAX_WIDTH);
       const height = Math.round(payload.height || 800);
       rpc("streamManager", "start_stream", [sessionId, { width, height }]);
+      console.log(`[spatial-capture] first screen frame for session ${sessionId} (${width}x${height})`);
     }
     sendFrame(sessionId, Buffer.from(payload.data));
+  }
+
+  // Surface getUserMedia / permission failures from the hidden capture renderer
+  // (otherwise they'd be invisible — the renderer has no devtools open).
+  function onScreenError(_event, payload) {
+    console.warn(
+      `[spatial-capture] screen-capture renderer error for session ${payload?.sessionId ?? "?"}: ${payload?.error ?? "unknown"}`,
+    );
   }
 
   // Re-point an already-open capture window at a new URL (agent switched docs).
@@ -394,6 +403,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
   return {
     start() {
       ipcMain.on("spatial-capture-frame", onScreenFrame);
+      ipcMain.on("spatial-capture-error", onScreenError);
       void connect();
     },
     stop() {
@@ -403,6 +413,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         reconnectTimer = null;
       }
       ipcMain.removeListener("spatial-capture-frame", onScreenFrame);
+      ipcMain.removeListener("spatial-capture-error", onScreenError);
       for (const id of [...sessions.keys()]) stopStream(id);
       try {
         ws?.close();
