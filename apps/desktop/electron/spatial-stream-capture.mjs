@@ -288,7 +288,9 @@ export function createSpatialStreamCapture({ getServerUrl }) {
   async function startScreenStream(sessionId) {
     if (IS_MAC) {
       const status = systemPreferences.getMediaAccessStatus?.("screen");
-      console.log(`[spatial-capture] macOS screen-recording status: ${status}`);
+      if (status && status !== "granted") {
+        console.warn(`[spatial-capture] macOS screen-recording status: ${status} — capture may be blank until granted.`);
+      }
     }
     try {
       const primary = electronScreen.getPrimaryDisplay();
