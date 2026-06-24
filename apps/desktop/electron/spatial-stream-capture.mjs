@@ -299,7 +299,9 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         webPreferences: {
           preload: path.join(__dirname, "spatial-capture-preload.cjs"),
           sandbox: false,
-          contextIsolation: true,
+          // This is our own hidden, content-free page; contextIsolation:false
+          // lets the preload use the page's main-world navigator.mediaDevices.
+          contextIsolation: false,
           nodeIntegration: false,
           backgroundThrottling: false,
           offscreen: false,
@@ -308,8 +310,9 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       const entry = { win, kind: "screen", dbg: null, started: false };
       sessions.set(sessionId, entry);
 
-      // Wait for the renderer (and its preload) before asking it to capture.
-      await win.webContents.loadURL("about:blank");
+      // Load over file:// (a secure context — required for getUserMedia to be
+      // exposed) and wait for the preload before asking it to capture.
+      await win.webContents.loadFile(path.join(__dirname, "spatial-capture.html"));
       if (win.isDestroyed()) return; // stopped while loading
       win.webContents.send("spatial-capture-start", {
         sessionId,
