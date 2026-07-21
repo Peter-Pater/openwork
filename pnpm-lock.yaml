@@ -346,6 +346,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.3.6)
       '@opencode-ai/sdk':
         specifier: ^1.17.3
         version: 1.17.3

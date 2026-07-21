@@ -1,0 +1,190 @@
+[
+  {
+    "id": "user_01",
+    "kind": "user",
+    "type": "person",
+    "label": "Household User",
+    "aliases": ["user", "the user"],
+    "description": "The person who addresses the chef agent.",
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "user_food_profile_01",
+    "kind": "profile",
+    "type": "profile.food_preferences",
+    "label": "Household Food Profile",
+    "aliases": ["food profile", "dietary preferences"],
+    "description": "Meal preferences and default serving size for the household user.",
+    "properties": {
+      "memoryRef": "memory/user_food_profile_01.md"
+    },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "chef_agent_01",
+    "kind": "agent",
+    "type": "agent.chef",
+    "label": "Chef",
+    "aliases": ["chef", "the chef"],
+    "description": "The chef agent responsible for the simulated kitchen.",
+    "properties": {},
+    "retrieval": { "keywords": ["chef", "cook", "dinner", "recipe"] },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "kitchen_inventory_bot_01",
+    "kind": "agent",
+    "type": "agent.inventory_bot",
+    "label": "Inventory Bot",
+    "aliases": ["inventory bot"],
+    "description": "A minimal second agent used to exercise scope resolution for an agent that is NOT granted access to the user's food profile.",
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "kitchen_01",
+    "kind": "spatial_region",
+    "type": "room.kitchen",
+    "label": "Simulated Kitchen",
+    "aliases": ["kitchen"],
+    "description": "The simulated kitchen room.",
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01" },
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_beef_01",
+    "kind": "physical_object",
+    "type": "ingredient.beef",
+    "label": "Beef",
+    "aliases": ["beef"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "beef" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_butter_01",
+    "kind": "physical_object",
+    "type": "ingredient.butter",
+    "label": "Butter",
+    "aliases": ["butter"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "butter" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_garlic_01",
+    "kind": "physical_object",
+    "type": "ingredient.garlic",
+    "label": "Garlic",
+    "aliases": ["garlic"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "garlic" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_tomato_01",
+    "kind": "physical_object",
+    "type": "ingredient.tomato",
+    "label": "Tomato",
+    "aliases": ["tomato"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "tomato_2" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_yogurt_01",
+    "kind": "physical_object",
+    "type": "ingredient.yogurt",
+    "label": "Yogurt",
+    "aliases": ["yogurt"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "yogurt" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_cabbage_01",
+    "kind": "physical_object",
+    "type": "ingredient.cabbage",
+    "label": "Cabbage",
+    "aliases": ["cabbage"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "cabbage" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_hamburger_01",
+    "kind": "physical_object",
+    "type": "ingredient.hamburger_patty",
+    "label": "Hamburger Patty",
+    "aliases": ["hamburger"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "hamburger" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "ingredient_broccoli_01",
+    "kind": "physical_object",
+    "type": "ingredient.broccoli",
+    "label": "Broccoli",
+    "aliases": ["broccoli"],
+    "spatial": { "sceneId": "kitchen_scene_01", "roomId": "kitchen_01", "anchorId": "broccoli" },
+    "properties": { "source": "iot_simulated_fridge_sensor" },
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "skill_inventory_check_01",
+    "kind": "skill",
+    "type": "skill.inventory_check",
+    "label": "Inventory Check",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "skill_dinner_planning_01",
+    "kind": "skill",
+    "type": "skill.dinner_planning",
+    "label": "Dinner Planning",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "skill_grocery_planning_01",
+    "kind": "skill",
+    "type": "skill.grocery_planning",
+    "label": "Grocery Planning",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "skill_artifact_management_01",
+    "kind": "skill",
+    "type": "skill.artifact_management",
+    "label": "Artifact Management",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "tool_save_on_foods_cart_01",
+    "kind": "tool",
+    "type": "tool.cart_adapter",
+    "label": "Save-On-Foods Cart",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  },
+  {
+    "id": "tool_save_on_foods_purchase_01",
+    "kind": "tool",
+    "type": "tool.purchase_adapter",
+    "label": "Save-On-Foods Purchase",
+    "aliases": [],
+    "properties": {},
+    "schemaVersion": "0.1"
+  }
+]

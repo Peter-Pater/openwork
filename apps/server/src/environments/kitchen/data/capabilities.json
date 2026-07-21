@@ -1,0 +1,74 @@
+[
+  {
+    "id": "capability_chef_inspect_inventory",
+    "subjectId": "chef_agent_01",
+    "operation": "inspect_inventory",
+    "executor": { "type": "skill", "ref": "skill_inventory_check_01" },
+    "permissions": {
+      "readScope": ["fridge", "descendants:fridge"],
+      "writeScope": ["task_artifacts"],
+      "actScope": [],
+      "approval": "none"
+    }
+  },
+  {
+    "id": "capability_chef_plan_dinner",
+    "subjectId": "chef_agent_01",
+    "operation": "plan_dinner",
+    "executor": { "type": "skill", "ref": "skill_dinner_planning_01" },
+    "permissions": {
+      "readScope": ["fridge", "descendants:fridge", "user_food_profile_01"],
+      "writeScope": ["task_artifacts"],
+      "actScope": [],
+      "approval": "none"
+    }
+  },
+  {
+    "id": "capability_chef_plan_groceries",
+    "subjectId": "chef_agent_01",
+    "operation": "plan_groceries",
+    "executor": { "type": "skill", "ref": "skill_grocery_planning_01" },
+    "permissions": {
+      "readScope": ["task_artifacts"],
+      "writeScope": ["task_artifacts"],
+      "actScope": [],
+      "approval": "none"
+    }
+  },
+  {
+    "id": "capability_chef_remove_artifact",
+    "subjectId": "chef_agent_01",
+    "operation": "remove_artifact",
+    "executor": { "type": "skill", "ref": "skill_artifact_management_01" },
+    "permissions": {
+      "readScope": ["task_artifacts"],
+      "writeScope": ["task_artifacts"],
+      "actScope": [],
+      "approval": "none"
+    }
+  },
+  {
+    "id": "capability_chef_prepare_cart",
+    "subjectId": "chef_agent_01",
+    "operation": "prepare_cart",
+    "executor": { "type": "tool", "ref": "tool_save_on_foods_cart_01" },
+    "permissions": {
+      "readScope": ["task_artifacts"],
+      "writeScope": ["cart_preview"],
+      "actScope": [],
+      "approval": "none"
+    }
+  },
+  {
+    "id": "capability_chef_purchase_groceries",
+    "subjectId": "chef_agent_01",
+    "operation": "purchase_groceries",
+    "executor": { "type": "tool", "ref": "tool_save_on_foods_purchase_01" },
+    "permissions": {
+      "readScope": ["current_task", "current_cart", "user_01"],
+      "writeScope": ["purchase_result"],
+      "actScope": ["external_purchase"],
+      "approval": "confirm_before_execution"
+    }
+  }
+]

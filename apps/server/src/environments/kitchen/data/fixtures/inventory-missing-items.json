@@ -1,0 +1,25 @@
+[
+  { "id": "observation_beef_quantity_01", "objectId": "ingredient_beef_01", "key": "quantity", "value": 100, "unit": "g", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_beef_condition_01", "objectId": "ingredient_beef_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_butter_quantity_01", "objectId": "ingredient_butter_01", "key": "quantity", "value": 50, "unit": "g", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_butter_condition_01", "objectId": "ingredient_butter_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_garlic_quantity_01", "objectId": "ingredient_garlic_01", "key": "quantity", "value": 1, "unit": "count", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_garlic_condition_01", "objectId": "ingredient_garlic_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_tomato_quantity_01", "objectId": "ingredient_tomato_01", "key": "quantity", "value": 1, "unit": "count", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_tomato_condition_01", "objectId": "ingredient_tomato_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_yogurt_quantity_01", "objectId": "ingredient_yogurt_01", "key": "quantity", "value": 400, "unit": "g", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_yogurt_condition_01", "objectId": "ingredient_yogurt_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_cabbage_quantity_01", "objectId": "ingredient_cabbage_01", "key": "quantity", "value": 1, "unit": "count", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_cabbage_condition_01", "objectId": "ingredient_cabbage_01", "key": "condition", "value": "use_soon", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_hamburger_quantity_01", "objectId": "ingredient_hamburger_01", "key": "quantity", "value": 2, "unit": "count", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_hamburger_condition_01", "objectId": "ingredient_hamburger_01", "key": "condition", "value": "good", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+
+  { "id": "observation_broccoli_quantity_01", "objectId": "ingredient_broccoli_01", "key": "quantity", "value": 50, "unit": "g", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } },
+  { "id": "observation_broccoli_condition_01", "objectId": "ingredient_broccoli_01", "key": "condition", "value": "use_soon", "observedAt": "2026-07-14T12:00:00Z", "confidence": 1, "source": { "type": "fixture", "sourceId": "inventory-missing-items" } }
+]

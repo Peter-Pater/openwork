@@ -1,0 +1,34 @@
+[
+  {
+    "id": "policy_chef_01",
+    "subjectId": "chef_agent_01",
+    "rules": [
+      {
+        "operation": "read",
+        "resources": ["*"],
+        "effect": "allow"
+      },
+      {
+        "operation": "prepare_cart",
+        "resources": ["tool_save_on_foods_cart_01"],
+        "effect": "allow"
+      },
+      {
+        "operation": "purchase",
+        "resources": ["tool_save_on_foods_purchase_01"],
+        "effect": "allow_with_confirmation"
+      }
+    ]
+  },
+  {
+    "id": "policy_inventory_bot_01",
+    "subjectId": "kitchen_inventory_bot_01",
+    "rules": [
+      {
+        "operation": "read",
+        "resources": ["kitchen_01"],
+        "effect": "allow"
+      }
+    ]
+  }
+]

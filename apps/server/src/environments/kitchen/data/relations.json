@@ -1,0 +1,20 @@
+[
+  { "id": "relation_chef_assigned_kitchen", "subjectId": "chef_agent_01", "predicate": "assigned_to", "objectId": "kitchen_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_responsible_fridge", "subjectId": "chef_agent_01", "predicate": "responsible_for", "objectId": "fridge", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_skill_inventory_check", "subjectId": "chef_agent_01", "predicate": "has_skill", "objectId": "skill_inventory_check_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_skill_dinner_planning", "subjectId": "chef_agent_01", "predicate": "has_skill", "objectId": "skill_dinner_planning_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_skill_grocery_planning", "subjectId": "chef_agent_01", "predicate": "has_skill", "objectId": "skill_grocery_planning_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_skill_artifact_management", "subjectId": "chef_agent_01", "predicate": "has_skill", "objectId": "skill_artifact_management_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_tool_cart", "subjectId": "chef_agent_01", "predicate": "has_tool", "objectId": "tool_save_on_foods_cart_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_chef_has_tool_purchase", "subjectId": "chef_agent_01", "predicate": "has_tool", "objectId": "tool_save_on_foods_purchase_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_inventory_bot_assigned_kitchen", "subjectId": "kitchen_inventory_bot_01", "predicate": "assigned_to", "objectId": "kitchen_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_beef", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_beef_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_butter", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_butter_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_garlic", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_garlic_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_tomato", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_tomato_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_yogurt", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_yogurt_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_cabbage", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_cabbage_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_hamburger", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_hamburger_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_fridge_contains_broccoli", "subjectId": "fridge", "predicate": "contains", "objectId": "ingredient_broccoli_01", "confidence": 1, "provenance": { "source": "fixture" } },
+  { "id": "relation_user_has_profile", "subjectId": "user_01", "predicate": "has_profile", "objectId": "user_food_profile_01", "confidence": 1, "provenance": { "source": "fixture" } }
+]
