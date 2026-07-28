@@ -75,7 +75,7 @@ import {
   writeRuntimeOpencodeConfig,
 } from "./runtime-opencode-config-store.js";
 import { spatialEventsBroker } from "./events.js";
-import { spatialStreamRelay, spatialStreamCoordinator } from "./spatial-stream-relay.js";
+import { spatialStreamRelay, spatialStreamCoordinator, googleWorkspaceEditUrl } from "./spatial-stream-relay.js";
 import {
   mergeOpenworkWorkspaceConfigs,
   readOpenworkWorkspaceConfig,
@@ -1466,10 +1466,29 @@ function createRoutes(
     const text = typeof body.prompt === "string" ? body.prompt.trim() : "";
     if (!text) throw new ApiError(400, "bad_request", "Missing prompt");
 
-    // If the XR drop told us which Doc this session is working on, start the
-    // live window stream for it (artifact-gated; no fileId → no window).
+    // Optional screenshot attachment (XR point-and-speak commands): a
+    // data:image/...;base64 URL, forwarded verbatim as a file part -- the same
+    // shape the desktop app's composer attachments use.
+    const image = typeof body.image === "string" ? body.image : "";
+    let imagePart: { type: "file"; mime: string; url: string; filename: string } | null = null;
+    if (image) {
+      const mimeMatch = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(image);
+      if (!mimeMatch) throw new ApiError(400, "bad_request", "image must be a base64 image data URL");
+      if (image.length > 10 * 1024 * 1024) throw new ApiError(400, "bad_request", "image too large");
+      imagePart = { type: "file", mime: mimeMatch[1], url: image, filename: "pointed-screenshot.jpg" };
+    }
+
+    // If the XR drop told us which artifact this session is working on, start
+    // the live window stream for it (artifact-gated; no fileId → no window).
+    // fileMime picks the right editor URL (doc / sheet / slide); absent means
+    // the historical Docs default.
     const fileId = typeof body.fileId === "string" ? body.fileId.trim() : "";
-    if (fileId) spatialStreamCoordinator.noteSessionDoc(sessionId, fileId);
+    const fileMime = typeof body.fileMime === "string" ? body.fileMime.trim() : "";
+    if (fileId) spatialStreamCoordinator.noteSessionUrl(sessionId, googleWorkspaceEditUrl(fileId, fileMime || undefined));
+    // A prompt always means legitimate new work is starting -- release any
+    // interrupt hold so normal idle-driven teardown resumes once this run
+    // finishes. No-op if the session wasn't held.
+    spatialStreamCoordinator.releaseHold(sessionId);
 
     const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
 
@@ -1535,7 +1554,7 @@ function createRoutes(
       ...(model ? { model } : {}),
       ...(session?.agent ? { agent: session.agent } : {}),
       ...(sessionModel?.variant ? { variant: sessionModel.variant } : {}),
-      parts: [{ type: "text", text }],
+      parts: [{ type: "text", text }, ...(imagePart ? [imagePart] : [])],
     });
     if (result.error !== undefined) {
       throw new ApiError(502, "opencode_request_failed", "OpenCode prompt failed", {
@@ -1547,6 +1566,60 @@ function createRoutes(
     const data = result.data as { id?: unknown } | null | undefined;
     const messageId = data && typeof data.id === "string" ? data.id : null;
     return jsonResponse({ ok: true, sessionId, model: model ?? null, messageId });
+  });
+
+  // Opens (and holds) a session's virtual-screen stream for an artifact
+  // WITHOUT prompting the backend. Used by the XR "drop a document and say
+  // nothing" flow: the avatar sits down at the open screen awaiting a spoken
+  // command; the backend only runs once an actual /prompt arrives (which
+  // releases the hold). DELETE tears the screen back down if the user walks
+  // away without ever giving a command -- there is no idle transition coming
+  // to close it otherwise, since nothing ever ran.
+  addRoute(routes, "POST", "/experimental/spatial/sessions/:id/screen", "none", async (ctx) => {
+    const sessionId = ctx.params.id;
+    if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
+    const body = await readJsonBody(ctx.request);
+    const fileId = typeof body.fileId === "string" ? body.fileId.trim() : "";
+    if (!fileId) throw new ApiError(400, "bad_request", "Missing fileId");
+    const fileMime = typeof body.fileMime === "string" ? body.fileMime.trim() : "";
+    spatialStreamCoordinator.holdSessionOpen(sessionId);
+    spatialStreamCoordinator.noteSessionUrl(sessionId, googleWorkspaceEditUrl(fileId, fileMime || undefined));
+    return jsonResponse({ ok: true, sessionId });
+  });
+
+  addRoute(routes, "DELETE", "/experimental/spatial/sessions/:id/screen", "none", async (ctx) => {
+    const sessionId = ctx.params.id;
+    if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
+    spatialStreamCoordinator.stopSession(sessionId);
+    return jsonResponse({ ok: true, sessionId });
+  });
+
+  // Stops a session's in-flight run without discarding its history, so a
+  // later /prompt on the same session id picks up naturally. Used by the XR
+  // client's busy-interruption proxemics (screen click / avatar touch) to
+  // actually pause the agent while the avatar stands by for the user.
+  addRoute(routes, "POST", "/experimental/spatial/sessions/:id/abort", "none", async (ctx) => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
+    const sessionId = ctx.params.id;
+    if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
+
+    // The abort below will report this session idle over SSE almost
+    // immediately; hold its window stream open through that transition so
+    // the avatar's screen doesn't disappear while the user decides what to
+    // prompt next. Released by the next /prompt call (see that route).
+    spatialStreamCoordinator.holdSessionOpen(sessionId);
+
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    // `directory` must be passed explicitly -- omitting it can resolve the
+    // abort against the server's default project where no matching run
+    // exists, silently returning `false` for a session that is genuinely busy.
+    const directory = resolveOpencodeDirectory(activeWorkspace);
+    const aborted = unwrapOpencodeResult(
+      await opencode.session.abort({ sessionID: sessionId, directory: directory ?? undefined }),
+      `/session/${sessionId}/abort`,
+    );
+    return jsonResponse({ ok: true, sessionId, aborted: aborted === true });
   });
 
   addRoute(routes, "GET", "/experimental/spatial/events", "none", async (ctx) => {

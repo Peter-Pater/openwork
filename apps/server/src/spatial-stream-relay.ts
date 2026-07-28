@@ -284,11 +284,42 @@ export type SpatialStreamCoordinator = {
    * browser-URL stream for the same session.
    */
   noteSessionComputerUse(sessionId: string): void;
+  /**
+   * Keep a session's stream alive through its next idle/retry transition --
+   * used by the busy-interruption abort call so the avatar's screen doesn't
+   * disappear while the user decides what to prompt next. Idempotent;
+   * release with releaseHold once a new prompt is sent.
+   */
+  holdSessionOpen(sessionId: string): void;
+  /** Undo holdSessionOpen -- normal idle teardown behavior resumes. */
+  releaseHold(sessionId: string): void;
+  /**
+   * Explicitly stop a session's stream and forget its target/hold. Used when
+   * an awaiting-command standby (screen opened without any backend run) is
+   * cancelled without a prompt ever being sent -- there is no idle
+   * transition coming to tear the stream down naturally.
+   */
+  stopSession(sessionId: string): void;
   dispose(): void;
 };
 
 function googleDocUrl(fileId: string): string {
   return `https://docs.google.com/document/d/${encodeURIComponent(fileId)}/edit`;
+}
+
+/**
+ * Edit URL for a Google Workspace file by its Drive mime type. Falls back to
+ * the Docs URL when the mime is missing/unknown (the historical behavior).
+ */
+export function googleWorkspaceEditUrl(fileId: string, mimeType?: string): string {
+  const id = encodeURIComponent(fileId);
+  if (mimeType === "application/vnd.google-apps.spreadsheet") {
+    return `https://docs.google.com/spreadsheets/d/${id}/edit`;
+  }
+  if (mimeType === "application/vnd.google-apps.presentation") {
+    return `https://docs.google.com/presentation/d/${id}/edit`;
+  }
+  return googleDocUrl(fileId);
 }
 
 function asString(value: unknown): string {
@@ -345,6 +376,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
   const targetBySession = new Map<string, SpatialStreamTarget>(); // sessionId -> what to show
   const streaming = new Set<string>(); // sessionIds with a live stream request
   const sawBusy = new Set<string>(); // sessionIds observed busy since last note
+  const held = new Set<string>(); // sessionIds whose stream survives an idle transition (interrupted, not finished)
 
   function startIfReady(sessionId: string): void {
     const target = targetBySession.get(sessionId);
@@ -408,6 +440,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
     if (event.action === "deleted") {
       targetBySession.delete(sessionId);
       sawBusy.delete(sessionId);
+      held.delete(sessionId);
       stop(sessionId);
       return;
     }
@@ -417,6 +450,9 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       sawBusy.add(sessionId);
       startIfReady(sessionId);
     } else if (status === "idle" || status === "retry") {
+      // A held session (busy-interruption abort in flight) keeps its stream
+      // regardless -- this idle is a pause, not completion.
+      if (held.has(sessionId)) return;
       // Only tear down once we've actually seen the session run, so an initial
       // "idle" poll right after a drop doesn't kill the optimistic stream.
       if (sawBusy.has(sessionId)) {
@@ -448,6 +484,19 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
     noteSessionComputerUse(sessionId) {
       if (!sessionId) return;
       noteSessionTarget(sessionId, { kind: "screen" });
+    },
+    holdSessionOpen(sessionId) {
+      if (sessionId) held.add(sessionId);
+    },
+    releaseHold(sessionId) {
+      if (sessionId) held.delete(sessionId);
+    },
+    stopSession(sessionId) {
+      if (!sessionId) return;
+      held.delete(sessionId);
+      sawBusy.delete(sessionId);
+      targetBySession.delete(sessionId);
+      stop(sessionId);
     },
     dispose() {
       spatialEventsBroker.removeListener(listener);
