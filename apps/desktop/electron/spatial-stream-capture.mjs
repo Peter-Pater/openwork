@@ -28,6 +28,15 @@ const STREAM_PATH = "/experimental/spatial/stream";
 const RECONNECT_MS = 2000;
 const SCREEN_FPS = 12; // capture frame rate for computer-use screen streams
 const SCREEN_MAX_WIDTH = 1280; // downscale the display to at most this width
+// Frame rate cap for browser (CDP screencast) streams. CDP emits a frame per
+// compositor paint, which over loopback is free but saturates the link to a
+// headset over Wi-Fi / adb / a tunnel. Matches the screen backend's cap by
+// default; override with OPENWORK_SPATIAL_BROWSER_FPS (0 = uncapped).
+const BROWSER_FPS = (() => {
+  const raw = Number(process.env.OPENWORK_SPATIAL_BROWSER_FPS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 12;
+})();
+const BROWSER_MIN_FRAME_MS = BROWSER_FPS > 0 ? 1000 / BROWSER_FPS : 0;
 // Isolated in-memory session for the capture windows, so the permission +
 // display-media handlers we install don't touch the app's other sessions.
 const SCREEN_PARTITION = "spatial-screen-capture";
@@ -207,7 +216,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       skipTaskbar: !SHOW_CAPTURE,
       webPreferences: { backgroundThrottling: false, offscreen: false },
     });
-    const entry = { win, kind: "browser", dbg: null, started: false };
+    const entry = { win, kind: "browser", dbg: null, started: false, lastSentMs: 0 };
     sessions.set(sessionId, entry);
 
     try {
@@ -263,7 +272,13 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         const height = Math.round(params.metadata?.deviceHeight || CAPTURE_HEIGHT);
         rpc("streamManager", "start_stream", [sessionId, { width, height }]);
       }
-      sendFrame(sessionId, jpeg);
+      // Drop frames above the cap, but always ack -- CDP stalls the screencast
+      // until the previous frame is acknowledged.
+      const now = Date.now();
+      if (!BROWSER_MIN_FRAME_MS || now - entry.lastSentMs >= BROWSER_MIN_FRAME_MS) {
+        entry.lastSentMs = now;
+        sendFrame(sessionId, jpeg);
+      }
       dbg.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
     });
 

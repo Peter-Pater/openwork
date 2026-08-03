@@ -1236,6 +1236,21 @@ let pollTimer: any = null;
 let previousSessionsState: Map<string, string> = new Map();
 let eventSubAbortController: AbortController | null = null;
 
+// Event types forwarded verbatim from opencode onto the spatial SSE stream.
+// message.part.updated feeds the thought/tool-activity feed; the question.*
+// trio drives the avatar-walks-over-to-ask-a-question flow (the XR client has
+// no bearer token, so it can't reach opencode's own /event stream directly);
+// session.idle/session.error give the "work is done" trigger sub-3s latency
+// instead of waiting on the 3s status-diff poll below.
+const FORWARDED_OPENCODE_EVENT_TYPES = new Set([
+  "message.part.updated",
+  "question.asked",
+  "question.replied",
+  "question.rejected",
+  "session.idle",
+  "session.error",
+]);
+
 async function startSpatialEventSubscription(config: ServerConfig, activeWorkspace: WorkspaceInfo) {
   if (eventSubAbortController) return;
   eventSubAbortController = new AbortController();
@@ -1246,13 +1261,13 @@ async function startSpatialEventSubscription(config: ServerConfig, activeWorkspa
   try {
     const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
     const sub = await opencode.event.subscribe(undefined, { signal });
-    
+
     for await (const raw of sub.stream) {
       if (signal.aborted) return;
       if (raw && typeof raw === "object" && "type" in raw) {
         const type = (raw as any).type;
         console.log(`[Spatial Server] Event received: ${type}`);
-        if (type === "message.part.updated") {
+        if (FORWARDED_OPENCODE_EVENT_TYPES.has(type)) {
           spatialEventsBroker.emit(raw);
         }
       }
@@ -1620,6 +1635,61 @@ function createRoutes(
       `/session/${sessionId}/abort`,
     );
     return jsonResponse({ ok: true, sessionId, aborted: aborted === true });
+  });
+
+  // Token-less mirror of opencode's own /question routes (normally gated
+  // behind the /opencode/* proxy's bearer token, which spatial clients don't
+  // carry). Backs the avatar-walks-over-with-a-selection-panel flow: the
+  // question.asked event on /experimental/spatial/events tells the XR client
+  // a question exists and gives it the options to render; these routes let it
+  // resync on reconnect (SSE has no replay) and send the user's answer back.
+  addRoute(routes, "GET", "/experimental/spatial/questions", "none", async (ctx) => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) return jsonResponse({ items: [] });
+    const directory = resolveOpencodeDirectory(activeWorkspace);
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    const items = unwrapOpencodeResult(
+      await opencode.question.list({ directory: directory ?? undefined }),
+      "/question",
+    );
+    return jsonResponse({ items: items ?? [] });
+  });
+
+  addRoute(routes, "POST", "/experimental/spatial/questions/:requestID/reply", "none", async (ctx) => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
+    const requestID = ctx.params.requestID;
+    if (!requestID) throw new ApiError(400, "bad_request", "Missing requestID");
+    const body = await readJsonBody(ctx.request);
+    const answers = Array.isArray(body.answers) ? (body.answers as unknown[]) : null;
+    if (!answers) throw new ApiError(400, "bad_request", "Missing answers");
+
+    const directory = resolveOpencodeDirectory(activeWorkspace);
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    const replied = unwrapOpencodeResult(
+      await opencode.question.reply({
+        requestID,
+        directory: directory ?? undefined,
+        answers: answers as string[][],
+      }),
+      `/question/${requestID}/reply`,
+    );
+    return jsonResponse({ ok: true, requestID, replied: replied === true });
+  });
+
+  addRoute(routes, "POST", "/experimental/spatial/questions/:requestID/reject", "none", async (ctx) => {
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
+    const requestID = ctx.params.requestID;
+    if (!requestID) throw new ApiError(400, "bad_request", "Missing requestID");
+
+    const directory = resolveOpencodeDirectory(activeWorkspace);
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    const rejected = unwrapOpencodeResult(
+      await opencode.question.reject({ requestID, directory: directory ?? undefined }),
+      `/question/${requestID}/reject`,
+    );
+    return jsonResponse({ ok: true, requestID, rejected: rejected === true });
   });
 
   addRoute(routes, "GET", "/experimental/spatial/events", "none", async (ctx) => {
