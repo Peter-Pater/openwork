@@ -1595,11 +1595,23 @@ function createRoutes(
     if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
     const body = await readJsonBody(ctx.request);
     const fileId = typeof body.fileId === "string" ? body.fileId.trim() : "";
-    if (!fileId) throw new ApiError(400, "bad_request", "Missing fileId");
     const fileMime = typeof body.fileMime === "string" ? body.fileMime.trim() : "";
+    // Always hold. `fileId` is optional, and the two modes serve different
+    // callers:
+    //   with fileId -- open a screen at that artifact and hold it (the XR
+    //     silent-drop flow: avatar sits down at the doc awaiting a command,
+    //     with no backend run yet).
+    //   without     -- hold whatever screen the session already has, so it
+    //     survives the busy -> idle completion teardown in the coordinator's
+    //     status listener. This is what lets an avatar still have a live
+    //     screen to show when it walks over to present finished work; the
+    //     hold must be taken on the *busy* edge, since the idle event that
+    //     triggers the presentation also tears the stream down synchronously.
     spatialStreamCoordinator.holdSessionOpen(sessionId);
-    spatialStreamCoordinator.noteSessionUrl(sessionId, googleWorkspaceEditUrl(fileId, fileMime || undefined));
-    return jsonResponse({ ok: true, sessionId });
+    if (fileId) {
+      spatialStreamCoordinator.noteSessionUrl(sessionId, googleWorkspaceEditUrl(fileId, fileMime || undefined));
+    }
+    return jsonResponse({ ok: true, sessionId, held: true, opened: !!fileId });
   });
 
   addRoute(routes, "DELETE", "/experimental/spatial/sessions/:id/screen", "none", async (ctx) => {
