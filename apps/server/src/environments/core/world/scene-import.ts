@@ -4,20 +4,19 @@ import type { Entity, Relation } from "../schemas/world.js";
 // playground/spatial-agent/simulated-kitchen/Scenes/kitchen-scene.json).
 // Position/quaternion/scale are trusted as-is and carried straight into each
 // entity's `spatial` field -- see SpatialTeammates.md's "Objects and the
-// scene graph" section.
+// scene graph" section. This mirrors xrblocks' current Simulator Environment
+// Manifest object shape (assetPath/id), not the older SceneManager format
+// (fileName/customName/locked) this scene file used before the xrblocks
+// scene-editor addon was rewritten upstream.
 export interface SceneObject {
-  fileName: string;
+  assetPath: string;
   position: [number, number, number];
   quaternion: [number, number, number, number];
   scale: [number, number, number];
-  customName: string | null;
-  visible: boolean;
-  locked: boolean;
+  id?: string | null;
 }
 
 export interface SceneFile {
-  version: number;
-  savedAt: string;
   objects: SceneObject[];
 }
 
@@ -67,13 +66,17 @@ export function importScene(scene: SceneFile, opts: ImportSceneOptions): { entit
   const usedIds = new Set<string>();
 
   for (const object of scene.objects) {
-    const baseId = object.customName?.trim() || slugFromFileName(object.fileName);
+    // assetPath is a full (possibly relative) URL to the .glb -- the
+    // registry/slug logic below has always operated on the bare filename, so
+    // recover that from the last path segment.
+    const fileName = object.assetPath.split("/").pop() ?? object.assetPath;
+    const baseId = object.id?.trim() || slugFromFileName(fileName);
     const id = disambiguate(baseId, usedIds);
     usedIds.add(id);
 
-    const registryEntry = MODEL_REGISTRY[modelKey(object.fileName)];
+    const registryEntry = MODEL_REGISTRY[modelKey(fileName)];
     const type = registryEntry?.type ?? "physical_object.unknown";
-    const label = registryEntry?.label ?? object.customName ?? id;
+    const label = registryEntry?.label ?? object.id ?? id;
 
     entities.push({
       id,

@@ -4,13 +4,11 @@ import { importScene, type SceneFile } from "./scene-import.js";
 
 function sceneObject(overrides: Partial<SceneFile["objects"][number]>): SceneFile["objects"][number] {
   return {
-    fileName: "table_model.glb",
+    assetPath: "../Models/table_model.glb",
     position: [0, 0, 0],
     quaternion: [0, 0, 0, 1],
     scale: [1, 1, 1],
-    customName: null,
-    visible: true,
-    locked: false,
+    id: null,
     ...overrides,
   };
 }
@@ -18,11 +16,9 @@ function sceneObject(overrides: Partial<SceneFile["objects"][number]>): SceneFil
 const OPTS = { roomEntityId: "kitchen_01", sceneId: "kitchen_scene_01" };
 
 describe("scene-import: importScene", () => {
-  test("derives entity ids from customName when present", () => {
+  test("derives entity ids from id when present", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
-      objects: [sceneObject({ fileName: "fridge_model.glb", customName: "fridge" })],
+      objects: [sceneObject({ assetPath: "../Models/fridge_model.glb", id: "fridge" })],
     };
     const { entities } = importScene(scene, OPTS);
     expect(entities).toHaveLength(1);
@@ -34,12 +30,10 @@ describe("scene-import: importScene", () => {
 
   test("carries the scene's real transform into spatial.position/quaternion/scale", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
       objects: [
         sceneObject({
-          fileName: "fridge_model.glb",
-          customName: "fridge",
+          assetPath: "../Models/fridge_model.glb",
+          id: "fridge",
           position: [-1.35, 0.31, 2.99],
           quaternion: [0, 1, 0, 6.12e-17],
           scale: [1.49, 1.49, 1.65],
@@ -52,11 +46,9 @@ describe("scene-import: importScene", () => {
     expect(entities[0].spatial?.scale).toEqual([1.49, 1.49, 1.65]);
   });
 
-  test("falls back to a fileName-derived slug when customName is null", () => {
+  test("falls back to an assetPath-derived slug when id is null", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
-      objects: [sceneObject({ fileName: "oven_model.glb", customName: null })],
+      objects: [sceneObject({ assetPath: "../Models/oven_model.glb", id: null })],
     };
     const { entities } = importScene(scene, OPTS);
     expect(entities[0].id).toBe("oven");
@@ -66,22 +58,18 @@ describe("scene-import: importScene", () => {
 
   test("disambiguates colliding fallback ids with a numeric suffix", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
       objects: [
-        sceneObject({ fileName: "oven_model.glb", customName: null }),
-        sceneObject({ fileName: "oven_model.glb", customName: null }),
+        sceneObject({ assetPath: "../Models/oven_model.glb", id: null }),
+        sceneObject({ assetPath: "../Models/oven_model.glb", id: null }),
       ],
     };
     const { entities } = importScene(scene, OPTS);
     expect(entities.map((entity) => entity.id).sort()).toEqual(["oven", "oven_2"]);
   });
 
-  test("unknown model fileNames get a generic fallback type instead of failing", () => {
+  test("unknown model assetPaths get a generic fallback type instead of failing", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
-      objects: [sceneObject({ fileName: "toaster_model.glb", customName: "toaster" })],
+      objects: [sceneObject({ assetPath: "../Models/toaster_model.glb", id: "toaster" })],
     };
     const { entities } = importScene(scene, OPTS);
     expect(entities[0].type).toBe("physical_object.unknown");
@@ -90,14 +78,12 @@ describe("scene-import: importScene", () => {
 
   test("emits one located_in relation per object, pointing at the room", () => {
     const scene: SceneFile = {
-      version: 1,
-      savedAt: "2026-01-01T00:00:00Z",
       objects: [
-        sceneObject({ fileName: "table_model.glb", customName: "table_left" }),
-        sceneObject({ fileName: "chair_model.glb", customName: "chair_right" }),
-        sceneObject({ fileName: "fridge_model.glb", customName: "fridge" }),
-        sceneObject({ fileName: "dishwasher_model.glb", customName: null }),
-        sceneObject({ fileName: "oven_model.glb", customName: null }),
+        sceneObject({ assetPath: "../Models/table_model.glb", id: "table_left" }),
+        sceneObject({ assetPath: "../Models/chair_model.glb", id: "chair_right" }),
+        sceneObject({ assetPath: "../Models/fridge_model.glb", id: "fridge" }),
+        sceneObject({ assetPath: "../Models/dishwasher_model.glb", id: null }),
+        sceneObject({ assetPath: "../Models/oven_model.glb", id: null }),
       ],
     };
     const { entities, relations } = importScene(scene, OPTS);
