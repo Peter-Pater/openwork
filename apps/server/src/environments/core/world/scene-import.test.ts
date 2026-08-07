@@ -76,6 +76,50 @@ describe("scene-import: importScene", () => {
     expect(entities[0].label).toBe("toaster");
   });
 
+  test("explicit label/type (room-understanding source) win over the model registry", () => {
+    const scene: SceneFile = {
+      objects: [
+        sceneObject({
+          assetPath: "../Models/fridge_model.glb",
+          id: "fridge",
+          label: "refrigerator",
+          type: "appliance.refrigerator",
+        }),
+      ],
+    };
+    const { entities } = importScene(scene, OPTS);
+    expect(entities[0].type).toBe("appliance.refrigerator");
+    expect(entities[0].label).toBe("refrigerator"); // not the registry's "Kitchen Fridge"
+  });
+
+  test("imports detector objects with no assetPath at all", () => {
+    const scene: SceneFile = {
+      objects: [
+        {
+          id: "table",
+          label: "kitchen table",
+          type: "furniture.table",
+          position: [1, 0, 2],
+          quaternion: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        {
+          id: "chair",
+          label: "chair",
+          type: "furniture.chair",
+          position: [1.5, 0, 2.5],
+          quaternion: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+      ],
+    };
+    const { entities, relations } = importScene(scene, OPTS);
+    expect(entities.map((entity) => entity.id).sort()).toEqual(["chair", "table"]);
+    expect(entities[0].type).toBe("furniture.table");
+    expect(entities[0].label).toBe("kitchen table");
+    expect(relations).toHaveLength(2);
+  });
+
   test("emits one located_in relation per object, pointing at the room", () => {
     const scene: SceneFile = {
       objects: [

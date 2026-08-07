@@ -17,8 +17,29 @@ const PLAN_GROCERIES_OPERATION = "plan_groceries";
 // "Placement is semantic only" decision. Real placement math is the later
 // XR phase's job, once it has panel dimensions/rendering context to get it
 // right.
-const RECIPE_ATTACHMENT_TARGET = "table_left";
-const GROCERY_LIST_ATTACHMENT_TARGET = "fridge";
+//
+// Targets are resolved by entity TYPE against the loaded world, not by
+// hardcoded id: the demo kitchen scene names its table `table_left` while a
+// captured room understanding names it `table` (see the XR client's
+// canonical mapping) -- resolving by type keeps both working with no id
+// string coupling. Ties break on lexicographically-smallest id, which also
+// prefers the bare canonical id over `_2`/`_3` duplicates.
+const RECIPE_ATTACHMENT_TYPE = "furniture.table";
+const GROCERY_LIST_ATTACHMENT_TYPE = "appliance.refrigerator";
+
+function resolveAttachmentTarget(entities: Entity[], type: string, purpose: string): string {
+  const candidates = entities
+    .filter((entity) => entity.kind === "physical_object" && entity.type === type)
+    .map((entity) => entity.id)
+    .sort();
+  if (candidates.length === 0) {
+    throw new EnvironmentError(
+      CORE_ERROR_CODES.INVALID_WORLD_DATA,
+      `No ${type} object in the room to attach the ${purpose} to -- rescan the room or check the scene file.`,
+    );
+  }
+  return candidates[0]!;
+}
 
 export interface DinnerPreparationWorkflowOptions {
   dataDir: string;
@@ -96,6 +117,13 @@ export async function runDinnerPreparationWorkflow(
 
   const inventory: InventoryItem[] = context.containers.flatMap((container) => buildInventorySummary(index, container));
 
+  const recipeAttachmentTarget = resolveAttachmentTarget(world.entities, RECIPE_ATTACHMENT_TYPE, "recipe");
+  const groceryListAttachmentTarget = resolveAttachmentTarget(
+    world.entities,
+    GROCERY_LIST_ATTACHMENT_TYPE,
+    "grocery list",
+  );
+
   const recipeArtifact = createArtifactEntity({
     idPrefix: "recipe",
     type: "digital_artifact.recipe",
@@ -104,7 +132,7 @@ export async function runDinnerPreparationWorkflow(
     content: recipe,
   });
   await appendArtifact(artifactStorePath, recipeArtifact, [
-    attachedToRelation(recipeArtifact.id, RECIPE_ATTACHMENT_TARGET),
+    attachedToRelation(recipeArtifact.id, recipeAttachmentTarget),
   ]);
 
   if (!findCapability(index, agentId, PLAN_GROCERIES_OPERATION)) {
@@ -124,7 +152,7 @@ export async function runDinnerPreparationWorkflow(
     content: groceryList,
   });
   await appendArtifact(artifactStorePath, groceryArtifact, [
-    attachedToRelation(groceryArtifact.id, GROCERY_LIST_ATTACHMENT_TARGET),
+    attachedToRelation(groceryArtifact.id, groceryListAttachmentTarget),
   ]);
 
   return {
@@ -135,13 +163,13 @@ export async function runDinnerPreparationWorkflow(
       {
         id: recipeArtifact.id,
         type: recipeArtifact.type,
-        attachedTo: RECIPE_ATTACHMENT_TARGET,
+        attachedTo: recipeAttachmentTarget,
         attachmentSlot: "surface",
       },
       {
         id: groceryArtifact.id,
         type: groceryArtifact.type,
-        attachedTo: GROCERY_LIST_ATTACHMENT_TARGET,
+        attachedTo: groceryListAttachmentTarget,
         attachmentSlot: "door",
       },
     ],

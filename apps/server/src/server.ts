@@ -19,6 +19,7 @@ import { computeReloadFingerprint } from "./reload-fingerprint.js";
 import { startReloadWatchers } from "./reload-watcher.js";
 import { opencodeConfigPath, openworkConfigPath, projectCommandsDir, projectSkillsDir } from "./workspace-files.js";
 import { ensureDir, exists, hashToken, shortId } from "./utils.js";
+import { resolveOpenworkDataDir } from "./data-dir.js";
 import { ensureWorkspaceFiles, readRawOpencodeConfig } from "./workspace-init.js";
 import { sanitizeCommandName, validateMcpName } from "./validators.js";
 import { TokenService } from "./tokens.js";
@@ -1466,6 +1467,70 @@ function createRoutes(
     }
 
     return jsonResponse({ sessionId, agent });
+  });
+
+  // Room understanding: the XR client's captured room (object labels + 3D
+  // boxes from the objects3d detector, mapped to canonical ids/types). The
+  // server is just the persistence point -- the file is the shared contract:
+  // the kitchen environment's world loader prefers it over the demo scene
+  // file on every tool call (see load-kitchen-world.ts roomUnderstandingPath,
+  // which resolves the SAME path), and the XR client re-fetches it at boot so
+  // capture is a one-time setup, not a per-boot ritual.
+  //
+  // Which directory that is depends on OPENWORK_DATA_DIR, so it is worth
+  // knowing where it comes from before hunting for the file:
+  //   - `~/.openwork/openwork-server`         this server standalone (data-dir.ts default)
+  //   - `~/.openwork/openwork-orchestrator-dev`  desktop `pnpm dev`
+  //                                          (apps/desktop/scripts/electron-dev.mjs)
+  //   - `~/.openwork/openwork-orchestrator`   packaged desktop app
+  //                                          (apps/desktop/electron/runtime.mjs)
+  // and the orchestrator CLI's `--data-dir` flag outranks the env var
+  // (apps/orchestrator/src/cli.ts resolveRouterDataDir), so a launch that
+  // passes it relocates this file too.
+  // The desktop launcher injects the variable into the whole process tree, so
+  // the opencode-spawned kitchen MCP child resolves the same directory and
+  // reads the same file -- which is why its artifacts.json sits beside this.
+  // Consequence worth remembering: a room captured under `pnpm dev` is NOT
+  // visible to the packaged app, since that is a different directory.
+  const roomUnderstandingFilePath = () =>
+    join(resolveOpenworkDataDir(), "environments", "rooms", "room-understanding.json");
+
+  addRoute(routes, "GET", "/experimental/spatial/room", "none", async () => {
+    const path = roomUnderstandingFilePath();
+    if (!existsSync(path)) throw new ApiError(404, "not_found", "No room understanding saved");
+    const raw = await readFile(path, "utf8");
+    return new Response(raw, { headers: { "Content-Type": "application/json" } });
+  });
+
+  addRoute(routes, "POST", "/experimental/spatial/room", "none", async (ctx) => {
+    const body = await readJsonBody(ctx.request);
+    const objects = Array.isArray(body.objects) ? body.objects : null;
+    if (!objects || objects.length === 0) {
+      throw new ApiError(400, "bad_request", "Missing objects");
+    }
+    for (const object of objects) {
+      const ok =
+        object &&
+        typeof object.id === "string" &&
+        object.id.trim() &&
+        Array.isArray(object.position) &&
+        object.position.length === 3 &&
+        Array.isArray(object.quaternion) &&
+        object.quaternion.length === 4 &&
+        Array.isArray(object.scale) &&
+        object.scale.length === 3;
+      if (!ok) {
+        throw new ApiError(400, "bad_request", "Each object needs id, position[3], quaternion[4], scale[3]");
+      }
+    }
+    const path = roomUnderstandingFilePath();
+    await ensureDir(dirname(path));
+    await writeFile(path, JSON.stringify(body, null, 2) + "\n", "utf8");
+    // Logged and returned because the location is not guessable: it follows
+    // OPENWORK_DATA_DIR, which the desktop app sets to its own per-build data
+    // directory rather than the ~/.openwork/openwork-server default.
+    console.log(`[spatial] Room understanding saved (${objects.length} objects): ${path}`);
+    return jsonResponse({ ok: true, objectCount: objects.length, path });
   });
 
   // Spatial (XR) clients have no auth token, so they cannot use the

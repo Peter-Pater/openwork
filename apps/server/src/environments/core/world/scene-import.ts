@@ -1,19 +1,24 @@
 import type { Entity, Relation } from "../schemas/world.js";
 
-// Raw shape produced by the xrblocks scene editor's export (see
-// playground/spatial-agent/simulated-kitchen/Scenes/kitchen-scene.json).
+// Raw shape produced by either of the two room sources:
+//   - the xrblocks scene editor's export (see playground/spatial-agent/
+//     simulated-kitchen/Scenes/kitchen-scene.json): assetPath-driven, with
+//     semantics recovered from the .glb basename via MODEL_REGISTRY below;
+//   - the XR client's room-understanding JSON (captured with the objects3d
+//     detector; see openwork-xr-client/room-understanding.js): no assets
+//     exist, so each object carries its `label` (raw detector label) and
+//     `type` (canonical entity type) directly, which win over the registry.
 // Position/quaternion/scale are trusted as-is and carried straight into each
 // entity's `spatial` field -- see SpatialTeammates.md's "Objects and the
-// scene graph" section. This mirrors xrblocks' current Simulator Environment
-// Manifest object shape (assetPath/id), not the older SceneManager format
-// (fileName/customName/locked) this scene file used before the xrblocks
-// scene-editor addon was rewritten upstream.
+// scene graph" section.
 export interface SceneObject {
-  assetPath: string;
+  assetPath?: string | null;
   position: [number, number, number];
   quaternion: [number, number, number, number];
   scale: [number, number, number];
   id?: string | null;
+  label?: string | null;
+  type?: string | null;
 }
 
 export interface SceneFile {
@@ -68,15 +73,20 @@ export function importScene(scene: SceneFile, opts: ImportSceneOptions): { entit
   for (const object of scene.objects) {
     // assetPath is a full (possibly relative) URL to the .glb -- the
     // registry/slug logic below has always operated on the bare filename, so
-    // recover that from the last path segment.
-    const fileName = object.assetPath.split("/").pop() ?? object.assetPath;
-    const baseId = object.id?.trim() || slugFromFileName(fileName);
+    // recover that from the last path segment. Detector-produced objects
+    // have no asset at all; their ids/semantics come from the object itself.
+    const fileName = object.assetPath
+      ? (object.assetPath.split("/").pop() ?? object.assetPath)
+      : null;
+    const baseId = object.id?.trim() || (fileName ? slugFromFileName(fileName) : "object");
     const id = disambiguate(baseId, usedIds);
     usedIds.add(id);
 
-    const registryEntry = MODEL_REGISTRY[modelKey(fileName)];
-    const type = registryEntry?.type ?? "physical_object.unknown";
-    const label = registryEntry?.label ?? object.id ?? id;
+    // Explicit type/label (room-understanding source) win; the .glb-basename
+    // registry stays the fallback for scene-editor exports.
+    const registryEntry = fileName ? MODEL_REGISTRY[modelKey(fileName)] : undefined;
+    const type = object.type?.trim() || registryEntry?.type || "physical_object.unknown";
+    const label = object.label?.trim() || registryEntry?.label || object.id || id;
 
     entities.push({
       id,

@@ -57,8 +57,12 @@ describe("scope-builder: dual-root resolveScopedContext", () => {
     // Scene-imported furniture/appliances the chef isn't specifically
     // responsible_for, but which still exist in the graph and should be
     // answerable -- the fridge itself is excluded since it's already
-    // reported as a container.
-    expect(otherIds).toEqual(["chair_right", "dishwasher", "oven", "table_left"].sort());
+    // reported as a container. (The dishwasher/oven were added to the live
+    // scene file through the scene editor with generated ids, hence
+    // `simulator-object-N` rather than semantic names.)
+    expect(otherIds).toEqual(
+      ["chair_right", "simulator-object-1", "simulator-object-2", "table_left"].sort(),
+    );
     expect(otherIds).not.toContain("fridge");
   });
 
@@ -81,7 +85,7 @@ describe("scope-builder: dual-root resolveScopedContext", () => {
     // in that room, fridge included (nothing here is listed as a container
     // for this agent, so nothing gets excluded).
     expect(context.environmentObjects.map((e) => e.id).sort()).toEqual(
-      ["chair_right", "dishwasher", "fridge", "oven", "table_left"].sort(),
+      ["chair_right", "fridge", "simulator-object-1", "simulator-object-2", "table_left"].sort(),
     );
   });
 

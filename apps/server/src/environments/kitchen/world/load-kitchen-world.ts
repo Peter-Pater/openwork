@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveOpenworkDataDir } from "../../../data-dir.js";
@@ -21,8 +22,36 @@ function defaultSceneFilePath(): string {
   );
 }
 
+// The room-understanding JSON captured by the XR client (labels + 3D boxes
+// from the objects3d detector, POSTed to /experimental/spatial/room and
+// persisted by the HTTP server). A superset of SceneFile, so importScene
+// reads it directly. Lives under the same OPENWORK_DATA_DIR convention as
+// artifacts -- both the HTTP server and this MCP child resolve the same
+// default (~/.openwork/openwork-server); if OPENWORK_DATA_DIR is ever set,
+// it must be set for both processes.
+export function roomUnderstandingPath(): string {
+  return join(resolveOpenworkDataDir(), "environments", "rooms", "room-understanding.json");
+}
+
+// Precedence: explicit arg (tests) -> KITCHEN_SCENE_PATH (manual override)
+// -> a captured room understanding if one exists -> the demo kitchen scene.
+// The world is rebuilt fresh on every tool call, so saving a room from the
+// XR client switches the agents' world on the very next call, and deleting
+// the file falls back to the demo kitchen.
+//
+// The room-understanding preference is skipped under `bun test`
+// (NODE_ENV=test): tests that load the live world assert against the demo
+// kitchen scene, and a room captured on the dev machine must not silently
+// swap the world out from under them. Tests that want the room file can pass
+// it explicitly.
 function resolveSceneFilePath(sceneFilePath?: string): string {
-  return sceneFilePath ?? process.env.KITCHEN_SCENE_PATH?.trim() ?? defaultSceneFilePath();
+  const explicit = sceneFilePath ?? process.env.KITCHEN_SCENE_PATH?.trim();
+  if (explicit) return explicit;
+  if (process.env.NODE_ENV !== "test") {
+    const roomPath = roomUnderstandingPath();
+    if (existsSync(roomPath)) return roomPath;
+  }
+  return defaultSceneFilePath();
 }
 
 // Where agent-created artifacts (recipe, grocery list, ...) persist --
@@ -75,7 +104,29 @@ export async function loadKitchenWorld(
   );
 
   const mergedEntities = [...sceneEntities, ...(entities as unknown[]), ...artifactEntities];
-  const mergedRelations = [...sceneRelations, ...(relations as unknown[]), ...artifactRelations];
+
+  // Artifact relations are a PERSISTENT ledger keyed to whatever object ids
+  // existed when the agent created them, so they outlive the room they were
+  // written against: re-scan the space (or rename an object) and yesterday's
+  // `attached_to table_left` names an entity that no longer exists. Left
+  // alone that fails referential integrity, which throws for the whole world
+  // -- taking down every kitchen tool, including read-only inspection, over a
+  // stale sticky note. Drop those attachments instead (the note's surface is
+  // genuinely gone) and keep the artifact entity itself, so nothing the agent
+  // produced is silently deleted.
+  const liveEntityIds = new Set(
+    mergedEntities.map((entity) => (entity as {id?: string}).id).filter((id): id is string => Boolean(id)),
+  );
+  const liveArtifactRelations = artifactRelations.filter((relation) => {
+    if (liveEntityIds.has(relation.objectId)) return true;
+    console.warn(
+      `[kitchen] Dropping stale artifact relation ${relation.id}: ` +
+        `"${relation.objectId}" is not in the current room.`,
+    );
+    return false;
+  });
+
+  const mergedRelations = [...sceneRelations, ...(relations as unknown[]), ...liveArtifactRelations];
 
   return validateWorldData({
     entities: mergedEntities,
