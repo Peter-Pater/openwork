@@ -1428,11 +1428,16 @@ function createRoutes(
   // Lets a spatial (XR) client bootstrap a session bound to a named agent
   // (e.g. a kitchen "chef") when none exists yet, without needing a client
   // bearer token -- the generic /opencode/session proxy requires one and is
-  // not reachable from these clients. `agent` is not a session.create()
-  // parameter in this SDK version; it's set per-prompt, so an optional
-  // primingPrompt immediately stamps the session's `agent` field (via
-  // promptAsync) so it's discoverable on the next GET .../sessions listing,
-  // and doubles as the agent's first spoken moment.
+  // not reachable from these clients. `agent` IS a session.create()
+  // parameter in this SDK version (v2 SessionCreateData.body.agent, stamped
+  // directly onto Session.agent), so the session is agent-bound from the
+  // moment it exists -- no priming prompt needed. (An earlier version of
+  // this route believed agent could only be set per-prompt and sent one just
+  // to stamp the field; that made every summoned agent start "working" on an
+  // introduction the instant it spawned, complete with the busy animation
+  // and, if it ran long enough, a walk-over presentation of that
+  // "introduction" as though it were a finished task. A freshly summoned
+  // agent should be idle until the user actually asks it something.)
   addRoute(routes, "POST", "/experimental/spatial/sessions", "none", async (ctx) => {
     const activeWorkspace = config.workspaces[0];
     if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
@@ -1441,11 +1446,10 @@ function createRoutes(
     const agent = typeof body.agent === "string" ? body.agent.trim() : "";
     if (!agent) throw new ApiError(400, "bad_request", "Missing agent");
     const title = typeof body.title === "string" ? body.title.trim() : "";
-    const primingPrompt = typeof body.primingPrompt === "string" ? body.primingPrompt.trim() : "";
 
     const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
     const created = unwrapOpencodeResult(
-      await opencode.session.create({ ...(title ? { title } : {}) }),
+      await opencode.session.create({ agent, ...(title ? { title } : {}) }),
       "/session",
     );
     const sessionId =
@@ -1454,16 +1458,6 @@ function createRoutes(
         : "";
     if (!sessionId) {
       throw new ApiError(502, "opencode_failed", "OpenCode session did not return an id");
-    }
-
-    if (primingPrompt) {
-      // Fire-and-forget, same as the existing /prompt handler below --
-      // prompt_async returns an empty 200 body on success.
-      await opencode.session.promptAsync({
-        sessionID: sessionId,
-        agent,
-        parts: [{ type: "text", text: primingPrompt }],
-      });
     }
 
     return jsonResponse({ sessionId, agent });
