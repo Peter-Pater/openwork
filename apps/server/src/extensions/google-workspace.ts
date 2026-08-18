@@ -224,7 +224,13 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         requests: {
           type: "array",
           items: { type: "object" },
-          description: "List of Google Docs API batchUpdate requests (e.g. insertText, deleteContentRange).",
+          description:
+            "List of Google Docs API batchUpdate requests. Body indices are 1-based (index 1 = start of body). Common shapes: " +
+            'insert text {"insertText":{"location":{"index":1},"text":"Hello"}}; ' +
+            'delete range {"deleteContentRange":{"range":{"startIndex":1,"endIndex":10}}}; ' +
+            'style text {"updateTextStyle":{"range":{"startIndex":1,"endIndex":10},"textStyle":{"bold":true},"fields":"bold"}}; ' +
+            'set paragraph style {"updateParagraphStyle":{"range":{"startIndex":1,"endIndex":10},"paragraphStyle":{"namedStyleType":"HEADING_1"},"fields":"namedStyleType"}}. ' +
+            "updateTextStyle/updateParagraphStyle require a `fields` mask naming the properties being set.",
         },
       },
       required: ["documentId", "requests"],
@@ -284,7 +290,14 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         requests: {
           type: "array",
           items: { type: "object" },
-          description: "List of Google Slides API batchUpdate requests (e.g. createSlide, insertText).",
+          description:
+            "List of Google Slides API batchUpdate requests. Slides are pages: the field naming a target slide is `pageObjectId` (NOT `pageId`). Common shapes: " +
+            'new slide {"createSlide":{"slideLayoutReference":{"predefinedLayout":"TITLE_AND_BODY"}}}; ' +
+            'insert text into a shape {"insertText":{"objectId":"<shapeId>","insertionIndex":0,"text":"Hello"}}; ' +
+            'add image {"createImage":{"url":"https://...","elementProperties":{"pageObjectId":"<slideId>","size":{"width":{"magnitude":300,"unit":"PT"},"height":{"magnitude":200,"unit":"PT"}},"transform":{"scaleX":1,"scaleY":1,"translateX":100,"translateY":100,"unit":"PT"}}}} (URL must be publicly fetchable); ' +
+            'move/resize {"updatePageElementTransform":{"objectId":"<elementId>","transform":{"scaleX":1,"scaleY":1,"translateX":100,"translateY":100,"unit":"PT"},"applyMode":"ABSOLUTE"}}; ' +
+            'delete {"deleteObject":{"objectId":"<id>"}}. ' +
+            "Get slide and element objectIds from slides_read_presentation first.",
         },
       },
       required: ["presentationId", "requests"],
@@ -366,7 +379,13 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
         requests: {
           type: "array",
           items: { type: "object" },
-          description: "List of Google Sheets API batchUpdate requests (e.g. addSheet, updateCells).",
+          description:
+            "List of Google Sheets API batchUpdate requests. `sheetId` is the numeric per-tab id from sheets_read_spreadsheet (NOT the spreadsheet ID; first tab is usually 0). Grid ranges use 0-based half-open indices. Common shapes: " +
+            'add tab {"addSheet":{"properties":{"title":"Data"}}}; ' +
+            'format cells {"repeatCell":{"range":{"sheetId":0,"startRowIndex":0,"endRowIndex":1,"startColumnIndex":0,"endColumnIndex":3},"cell":{"userEnteredFormat":{"textFormat":{"bold":true}}},"fields":"userEnteredFormat.textFormat.bold"}}; ' +
+            'resize columns {"autoResizeDimensions":{"dimensions":{"sheetId":0,"dimension":"COLUMNS","startIndex":0,"endIndex":5}}}; ' +
+            'rename tab {"updateSheetProperties":{"properties":{"sheetId":0,"title":"Renamed"},"fields":"title"}}. ' +
+            "repeatCell/updateSheetProperties require a `fields` mask. For writing plain cell values prefer sheets_update_values.",
         },
       },
       required: ["spreadsheetId", "requests"],
@@ -689,7 +708,11 @@ async function fetchGoogleJson(url: string, init: RequestInit = {}) {
             ? payload.error
             : response.statusText
       : response.statusText;
-    throw new Error(`Google request failed (${response.status}): ${details}`);
+    // ApiError, not Error: the server's catch-all rewrites plain Errors into a
+    // generic 500 "Unexpected server error", which hides Google's message —
+    // the one thing that lets an agent correct a malformed batchUpdate request.
+    const status = response.status >= 400 && response.status < 600 ? response.status : 502;
+    throw new ApiError(status, "google_api_error", `Google request failed (${response.status}): ${details}`, payload);
   }
   return payload;
 }

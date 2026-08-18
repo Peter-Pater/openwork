@@ -278,7 +278,17 @@ export function registerCoreRoutes(options: RegisterCoreRoutesOptions): void {
       throw new ApiError(403, "forbidden", "Viewer tokens cannot call extension actions");
     }
     const body = await readJsonBody(ctx.request);
-    const result = await callExperimentalExtensionAction(config, env, body);
+    let result: Awaited<ReturnType<typeof callExperimentalExtensionAction>>;
+    try {
+      result = await callExperimentalExtensionAction(config, env, body);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      // Keep the underlying message: the server's outer catch-all would
+      // replace a plain Error with "Unexpected server error", leaving the
+      // agent with nothing to correct its request against.
+      const message = error instanceof Error && error.message ? error.message : "Extension action failed";
+      throw new ApiError(500, "extension_action_failed", message);
+    }
     // Artifact-gated XR trigger: if the agent touched a viewable Google
     // Workspace file, start (or re-point) that session's live window stream.
     spatialStreamCoordinator.noteExtensionCall(body, result);

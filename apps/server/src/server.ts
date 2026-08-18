@@ -1605,7 +1605,7 @@ function createRoutes(
       isDeprecated(model.modelID) ||
       isDeprecated(`${model.providerID}/${model.modelID}`)
     ) {
-      model = { providerID: "google", modelID: "gemini-3.5-flash" };
+      model = { providerID: "google", modelID: "gemini-3.7-flash" };
     }
 
     // prompt_async is fire-and-forget: it returns an empty 200 body, so we

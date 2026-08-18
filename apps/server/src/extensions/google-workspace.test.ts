@@ -145,6 +145,50 @@ describe("Google Workspace extension", () => {
     );
   });
 
+  test("surfaces Google's error message as an ApiError instead of a plain Error", async () => {
+    process.env.OPENWORK_DEV_MODE = "1";
+    process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
+    process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET = "secret";
+    globalThis.fetch = Object.assign(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 400,
+              message: "Unknown name \"pageId\" at 'requests[0].create_image.element_properties'",
+              status: "INVALID_ARGUMENT",
+            },
+          }),
+          { status: 400 },
+        ),
+      { preconnect: previousFetch.preconnect },
+    );
+    const config = createTestConfig();
+    await writePlaintextVault(config, {
+      version: 2,
+      activeAccountId: "sub-one",
+      accounts: [accountRecord("one@example.com", "sub-one")],
+    });
+
+    // A plain Error here would be masked into a generic 500 "Unexpected
+    // server error" by the server's catch-all, hiding the field-level detail
+    // the agent needs to fix its batchUpdate request.
+    expect(
+      callGoogleWorkspaceExtensionAction(
+        config,
+        "slides_update_presentation",
+        { presentationId: "pres-1", requests: [{ createImage: {} }] },
+        {},
+      ),
+    ).rejects.toThrow(
+      new ApiError(
+        400,
+        "google_api_error",
+        "Google request failed (400): Unknown name \"pageId\" at 'requests[0].create_image.element_properties'",
+      ),
+    );
+  });
+
   test("gmail_list_messages returns message summaries", async () => {
     process.env.OPENWORK_DEV_MODE = "1";
     process.env.OPENWORK_GOOGLE_WORKSPACE_ALLOW_PLAINTEXT_VAULT = "1";
