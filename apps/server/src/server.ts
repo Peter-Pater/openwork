@@ -19,7 +19,7 @@ import { computeReloadFingerprint } from "./reload-fingerprint.js";
 import { startReloadWatchers } from "./reload-watcher.js";
 import { opencodeConfigPath, openworkConfigPath, projectCommandsDir, projectSkillsDir } from "./workspace-files.js";
 import { ensureDir, exists, hashToken, shortId } from "./utils.js";
-import { resolveOpenworkDataDir } from "./data-dir.js";
+import { newScanPath, newestScanPath } from "./environments/rooms/room-store.js";
 import { ensureWorkspaceFiles, readRawOpencodeConfig } from "./workspace-init.js";
 import { sanitizeCommandName, validateMcpName } from "./validators.js";
 import { TokenService } from "./tokens.js";
@@ -1467,31 +1467,16 @@ function createRoutes(
   // boxes from the objects3d detector, mapped to canonical ids/types). The
   // server is just the persistence point -- the file is the shared contract:
   // the kitchen environment's world loader prefers it over the demo scene
-  // file on every tool call (see load-kitchen-world.ts roomUnderstandingPath,
-  // which resolves the SAME path), and the XR client re-fetches it at boot so
-  // capture is a one-time setup, not a per-boot ritual.
+  // file on every tool call, resolving it through the SAME room-store module
+  // used here, and the XR client re-fetches it at boot.
   //
-  // Which directory that is depends on OPENWORK_DATA_DIR, so it is worth
-  // knowing where it comes from before hunting for the file:
-  //   - `~/.openwork/openwork-server`         this server standalone (data-dir.ts default)
-  //   - `~/.openwork/openwork-orchestrator-dev`  desktop `pnpm dev`
-  //                                          (apps/desktop/scripts/electron-dev.mjs)
-  //   - `~/.openwork/openwork-orchestrator`   packaged desktop app
-  //                                          (apps/desktop/electron/runtime.mjs)
-  // and the orchestrator CLI's `--data-dir` flag outranks the env var
-  // (apps/orchestrator/src/cli.ts resolveRouterDataDir), so a launch that
-  // passes it relocates this file too.
-  // The desktop launcher injects the variable into the whole process tree, so
-  // the opencode-spawned kitchen MCP child resolves the same directory and
-  // reads the same file -- which is why its artifacts.json sits beside this.
-  // Consequence worth remembering: a room captured under `pnpm dev` is NOT
-  // visible to the packaged app, since that is a different directory.
-  const roomUnderstandingFilePath = () =>
-    join(resolveOpenworkDataDir(), "environments", "rooms", "room-understanding.json");
-
+  // Every save writes a NEW timestamped file rather than overwriting, so a
+  // bad re-scan can never destroy a good room -- the newest is simply the one
+  // served, and older ones are pruned by hand. See room-store.ts for the
+  // naming scheme and for which directory OPENWORK_DATA_DIR resolves to.
   addRoute(routes, "GET", "/experimental/spatial/room", "none", async () => {
-    const path = roomUnderstandingFilePath();
-    if (!existsSync(path)) throw new ApiError(404, "not_found", "No room understanding saved");
+    const path = newestScanPath();
+    if (!path) throw new ApiError(404, "not_found", "No room understanding saved");
     const raw = await readFile(path, "utf8");
     return new Response(raw, { headers: { "Content-Type": "application/json" } });
   });
@@ -1517,7 +1502,10 @@ function createRoutes(
         throw new ApiError(400, "bad_request", "Each object needs id, position[3], quaternion[4], scale[3]");
       }
     }
-    const path = roomUnderstandingFilePath();
+    // capturedAt comes from the client's serializeRoom(); room-store falls
+    // back to now if it is missing or unparseable, so a malformed payload is
+    // still saved rather than rejected.
+    const path = newScanPath(typeof body.capturedAt === "string" ? body.capturedAt : undefined);
     await ensureDir(dirname(path));
     await writeFile(path, JSON.stringify(body, null, 2) + "\n", "utf8");
     // Logged and returned because the location is not guessable: it follows

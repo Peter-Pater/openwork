@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveOpenworkDataDir } from "../../../data-dir.js";
 import { CORE_ERROR_CODES, EnvironmentError } from "../../core/errors.js";
+import { newestScanPath } from "../../rooms/room-store.js";
 import type { WorldData } from "../../core/schemas/world.js";
 import { readArtifacts } from "../../core/world/artifact-store.js";
 import { importScene, type SceneFile } from "../../core/world/scene-import.js";
@@ -22,22 +22,17 @@ function defaultSceneFilePath(): string {
   );
 }
 
-// The room-understanding JSON captured by the XR client (labels + 3D boxes
-// from the objects3d detector, POSTed to /experimental/spatial/room and
-// persisted by the HTTP server). A superset of SceneFile, so importScene
-// reads it directly. Lives under the same OPENWORK_DATA_DIR convention as
-// artifacts -- both the HTTP server and this MCP child resolve the same
-// default (~/.openwork/openwork-server); if OPENWORK_DATA_DIR is ever set,
-// it must be set for both processes.
-export function roomUnderstandingPath(): string {
-  return join(resolveOpenworkDataDir(), "environments", "rooms", "room-understanding.json");
-}
-
 // Precedence: explicit arg (tests) -> KITCHEN_SCENE_PATH (manual override)
-// -> a captured room understanding if one exists -> the demo kitchen scene.
-// The world is rebuilt fresh on every tool call, so saving a room from the
-// XR client switches the agents' world on the very next call, and deleting
-// the file falls back to the demo kitchen.
+// -> the NEWEST captured room understanding if any exists -> the demo kitchen
+// scene. The world is rebuilt fresh on every tool call, so saving a room from
+// the XR client switches the agents' world on the very next call, and deleting
+// every scan falls back to the demo kitchen.
+//
+// The scan path is resolved through the shared room-store module rather than
+// re-derived here. That matters more than it looks: this function reads the
+// file directly and never goes through the HTTP layer, so if the two ever
+// disagreed about naming, the XR client would serve the new scan while the
+// agents silently reasoned about the demo kitchen.
 //
 // The room-understanding preference is skipped under `bun test`
 // (NODE_ENV=test): tests that load the live world assert against the demo
@@ -48,8 +43,8 @@ function resolveSceneFilePath(sceneFilePath?: string): string {
   const explicit = sceneFilePath ?? process.env.KITCHEN_SCENE_PATH?.trim();
   if (explicit) return explicit;
   if (process.env.NODE_ENV !== "test") {
-    const roomPath = roomUnderstandingPath();
-    if (existsSync(roomPath)) return roomPath;
+    const roomPath = newestScanPath();
+    if (roomPath) return roomPath;
   }
   return defaultSceneFilePath();
 }
