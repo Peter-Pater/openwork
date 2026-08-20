@@ -20,6 +20,12 @@ import { startReloadWatchers } from "./reload-watcher.js";
 import { opencodeConfigPath, openworkConfigPath, projectCommandsDir, projectSkillsDir } from "./workspace-files.js";
 import { ensureDir, exists, hashToken, shortId } from "./utils.js";
 import { newScanPath, newestScanPath } from "./environments/rooms/room-store.js";
+import { createArtifactWatcher } from "./environments/artifacts/artifact-watcher.js";
+import {
+  artifactFilePath,
+  isSafeSessionId,
+  readIndex as readArtifactIndex,
+} from "./environments/artifacts/session-artifact-store.js";
 import { ensureWorkspaceFiles, readRawOpencodeConfig } from "./workspace-init.js";
 import { sanitizeCommandName, validateMcpName } from "./validators.js";
 import { TokenService } from "./tokens.js";
@@ -1237,6 +1243,13 @@ let pollTimer: any = null;
 let previousSessionsState: Map<string, string> = new Map();
 let eventSubAbortController: AbortController | null = null;
 
+// Turns observed webfetch tool parts into stored per-session artifacts (the
+// XR artifact piles). Shares the polling lifecycle below: the broker only
+// carries message.part.updated while an XR client is subscribed, so there is
+// nothing for the watcher to hear outside that window anyway.
+const artifactWatcher = createArtifactWatcher(spatialStreamRelay);
+spatialStreamRelay.setArtifactIngestHandler(artifactWatcher.ingest);
+
 // Event types forwarded verbatim from opencode onto the spatial SSE stream.
 // message.part.updated feeds the thought/tool-activity feed; the question.*
 // trio drives the avatar-walks-over-to-ask-a-question flow (the XR client has
@@ -1293,6 +1306,7 @@ function startSpatialPolling(config: ServerConfig) {
   if (activeWorkspace) {
     void startSpatialEventSubscription(config, activeWorkspace);
   }
+  artifactWatcher.start();
 
   pollTimer = setInterval(async () => {
     try {
@@ -1336,6 +1350,7 @@ function startSpatialPolling(config: ServerConfig) {
 }
 
 function stopSpatialPolling() {
+  artifactWatcher.stop();
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -1749,6 +1764,40 @@ function createRoutes(
       `/question/${requestID}/reject`,
     );
     return jsonResponse({ ok: true, requestID, rejected: rejected === true });
+  });
+
+  // Artifact piles: what a session gathered (see environments/artifacts/).
+  // auth "none" like every spatial route -- and, named deliberately rather
+  // than by accident: the bytes below can be snapshots taken in the app's
+  // logged-in browser session, served to anyone on the LAN who knows the
+  // URL. Same posture as the live doc stream, which already broadcasts the
+  // same class of content unauthenticated over the WS relay.
+  addRoute(routes, "GET", "/experimental/spatial/sessions/:id/artifacts", "none", async (ctx) => {
+    const sessionId = ctx.params.id;
+    if (!isSafeSessionId(sessionId)) throw new ApiError(400, "bad_request", "bad session id");
+    return jsonResponse({ artifacts: readArtifactIndex(sessionId) });
+  });
+
+  addRoute(routes, "GET", "/experimental/spatial/artifacts/:sessionId/:artifactId", "none", async (ctx) => {
+    // Both params are validated to closed alphabets inside artifactFilePath
+    // (session id charset; artifact id = sha256 hex), so no path from here
+    // can escape the store directory. CORS comes from the global withCors
+    // wrapper -- which THREE.TextureLoader's crossOrigin='anonymous' <img>
+    // fetch genuinely requires, so if corsOrigins ever stops including the
+    // XR origin, pile images are the first thing to silently break.
+    const path = artifactFilePath(ctx.params.sessionId, ctx.params.artifactId);
+    if (!path) throw new ApiError(404, "not_found", "artifact not found");
+    const bytes = await readFile(path);
+    const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+    const mime =
+      ext === "png" ? "image/png" :
+      ext === "jpg" ? "image/jpeg" :
+      ext === "gif" ? "image/gif" :
+      ext === "webp" ? "image/webp" :
+      ext === "avif" ? "image/avif" : "application/octet-stream";
+    return new Response(new Uint8Array(bytes), {
+      headers: { "Content-Type": mime, "Cache-Control": "public, max-age=31536000, immutable" },
+    });
   });
 
   addRoute(routes, "GET", "/experimental/spatial/events", "none", async (ctx) => {

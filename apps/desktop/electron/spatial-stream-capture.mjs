@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 import { BrowserWindow, desktopCapturer, ipcMain, screen as electronScreen, shell, systemPreferences } from "electron";
 import { WebSocket } from "ws";
 
+import { createArtifactCapture } from "./artifact-capture.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const STREAM_PATH = "/experimental/spatial/stream";
@@ -65,6 +67,10 @@ export function createSpatialStreamCapture({ getServerUrl }) {
   let ws = null;
   let reconnectTimer = null;
   let disposed = false;
+  // Artifact-pile captures ride this module's relay socket rather than
+  // opening a second one -- the server addresses both jobs at the same
+  // captureController target (see spatial-stream-relay.ts).
+  const artifactCapture = createArtifactCapture();
   let screenSettingsOpened = false; // open the macOS settings pane at most once
   const sessions = new Map(); // sessionId -> { win, dbg, started }
 
@@ -160,6 +166,38 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       void updateStream(String(args[0] ?? ""), String(args[1] ?? ""));
     } else if (params.func === "stopStream") {
       stopStream(String(args[0] ?? ""));
+    } else if (params.func === "captureArtifact") {
+      // Fire-and-forget in: the server->controller direction carries no RPC
+      // ids, so the result returns as a call the other way (artifactStore.
+      // ingest), correlated by requestId. capture() never rejects.
+      //
+      // The ingest is sent directly rather than through send()/rpc(), whose
+      // silent catch is fine for a dropped video frame but turned a lost
+      // artifact into an undiagnosable hole: capture completed (the hidden
+      // window's history proved it) while nothing arrived server-side and
+      // nothing said why. Every outcome here logs.
+      const requestId = String(args[0] ?? "");
+      const url = String(args[1] ?? "");
+      const options = args[2] && typeof args[2] === "object" ? args[2] : {};
+      if (requestId) {
+        console.log(`[artifact-capture] ${requestId}: capturing ${url}${options.imageOnly ? " (image-only)" : ""}`);
+        void artifactCapture.capture(url, options).then((payload) => {
+          const chars = payload?.base64?.length ?? 0;
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            console.warn(`[artifact-capture] ${requestId}: relay socket not open (state ${ws?.readyState}); ingest dropped.`);
+            return;
+          }
+          try {
+            ws.send(JSON.stringify({ params: { target: "artifactStore", func: "ingest", args: [requestId, payload] } }));
+            console.log(
+              `[artifact-capture] ${requestId}: ingest sent (ok=${payload?.ok}, kind=${payload?.kind ?? "-"}, ` +
+              `${chars} base64 chars${payload?.error ? `, error: ${payload.error}` : ""}).`,
+            );
+          } catch (e) {
+            console.warn(`[artifact-capture] ${requestId}: ingest send failed:`, e?.message ?? e);
+          }
+        });
+      }
     }
   }
 
@@ -467,6 +505,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       }
       ipcMain.removeListener("spatial-capture-frame", onScreenFrame);
       ipcMain.removeListener("spatial-capture-error", onScreenError);
+      artifactCapture.dispose();
       for (const id of [...sessions.keys()]) stopStream(id);
       try {
         ws?.close();

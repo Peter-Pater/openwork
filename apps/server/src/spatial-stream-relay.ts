@@ -57,6 +57,16 @@ export type SpatialStreamRelay = {
   requestUpdateStream(streamId: string, url: string): void;
   /** Ask the connected capture controller(s) to stop + close a window. */
   requestStopStream(streamId: string): void;
+  /**
+   * Ask the capture controller to fetch/snapshot a URL for the artifact piles
+   * (see environments/artifacts/artifact-watcher.ts). Fire-and-forget like the
+   * other controller calls -- the result comes back as an
+   * `artifactStore.ingest(requestId, payload)` call in the other direction,
+   * routed to the handler set below. `requestId` correlates the two legs.
+   */
+  requestCaptureArtifact(requestId: string, url: string, options?: { imageOnly?: boolean }): void;
+  /** Route incoming `artifactStore.ingest` calls (from Electron) to a handler. */
+  setArtifactIngestHandler(handler: ((requestId: string, payload: unknown) => void) | null): void;
   /** Whether at least one capture controller is currently connected. */
   hasController(): boolean;
   /** Terminate all live sockets (keeps the server reusable across restarts). */
@@ -87,6 +97,7 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
   const wss = new WebSocketServer({ noServer: true });
   const streams = new Map<string, StreamEntry>();
   const controllers = new Set<WebSocket>();
+  let artifactIngestHandler: ((requestId: string, payload: unknown) => void) | null = null;
 
   function endStream(streamId: string, sender: WebSocket | null): void {
     const entry = streams.get(streamId);
@@ -156,6 +167,16 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
         controllers.add(ws);
         reply(ws, msg.id, { ok: true });
       }
+    } else if (params.target === "artifactStore") {
+      // Electron returning a captureArtifact result (see requestCaptureArtifact).
+      if (params.func === "ingest") {
+        try {
+          artifactIngestHandler?.(String(args[0] ?? ""), args[1]);
+        } catch (err) {
+          console.error("[Artifacts] ingest handler failed:", err);
+        }
+        reply(ws, msg.id, { ok: true });
+      }
     }
   }
 
@@ -222,6 +243,14 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
       for (const controller of controllers) {
         call(controller, "captureController", "stopStream", [streamId]);
       }
+    },
+    requestCaptureArtifact(requestId, url, options = {}) {
+      for (const controller of controllers) {
+        call(controller, "captureController", "captureArtifact", [requestId, url, options]);
+      }
+    },
+    setArtifactIngestHandler(handler) {
+      artifactIngestHandler = handler;
     },
     hasController() {
       return controllers.size > 0;

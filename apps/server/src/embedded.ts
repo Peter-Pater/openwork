@@ -39,9 +39,14 @@ export type EmbeddedServerHandle = {
 export async function startEmbeddedServer(options: EmbeddedServerOptions): Promise<EmbeddedServerHandle> {
   const config = await resolveServerConfig(options);
   const serverUrl = `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`;
-  const opencodeModelsUrl = process.env.OPENWORK_DEV_MODE === "1"
-    ? "http://localhost:8791/models"
-    : "https://models.openworklabs.com/";
+  // Dev used to point at the local den inference proxy (localhost:8791),
+  // which we never run — the engine's catalog fetch failed on every launch
+  // and it silently fell back to the models.dev snapshot bundled into the
+  // opencode binary. New models were missing and custom-declared ones got
+  // attachment=false defaults, so image parts were dropped. Use the hosted
+  // mirror everywhere; OPENCODE_MODELS_URL overrides for den development.
+  const opencodeModelsUrl = process.env.OPENCODE_MODELS_URL?.trim()
+    || "https://models.openworklabs.com/";
 
   // Spawn managed OpenCode if requested and no explicit base URL was provided.
   let managedOpencode: ManagedOpencodeServer | null = null;
