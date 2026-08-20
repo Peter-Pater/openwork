@@ -1534,6 +1534,69 @@ function createRoutes(
   // token-gated opencode proxy. This mirrors the read-only spatial endpoints
   // and forwards a pre-coded prompt to the session via the workspace opencode
   // client, letting the agent start working on it.
+  // Summary of the session's most recent assistant turn, for the XR client's
+  // completion check. opencode reports "idle" both when the agent finished
+  // and when the model returned NOTHING -- zero output tokens, no text, no
+  // tool call, finish reason unmapped (Gemini's MALFORMED_FUNCTION_CALL /
+  // OTHER terminations look exactly like this). The client cannot tell the
+  // two apart from the status stream alone, and treating the latter as done
+  // had the avatar reporting on work it never did. `empty` is the verdict;
+  // agent + model are returned so a retry can continue as the same persona
+  // (session.agent/model are overwritten by the desktop app per prompt).
+  addRoute(routes, "GET", "/experimental/spatial/sessions/:id/last-turn", "none", async (ctx) => {
+    const sessionId = ctx.params.id;
+    if (!sessionId) throw new ApiError(400, "bad_request", "Missing session id");
+    const activeWorkspace = config.workspaces[0];
+    if (!activeWorkspace) throw new ApiError(503, "no_workspace", "No active workspace");
+    const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
+    const messages = unwrapOpencodeResult(
+      await opencode.session.messages({ sessionID: sessionId }),
+      `/session/${sessionId}/message`,
+    ) as Array<{ info?: Record<string, unknown>; parts?: Array<Record<string, unknown>> }>;
+    let last: { info?: Record<string, unknown>; parts?: Array<Record<string, unknown>> } | null = null;
+    for (const message of messages) {
+      if (message?.info?.role === "assistant") last = message;
+    }
+    if (!last?.info) return jsonResponse({ ok: true, sessionId, turn: null });
+    const info = last.info;
+    const parts = Array.isArray(last.parts) ? last.parts : [];
+    const hasText = parts.some((p) => p.type === "text" && typeof p.text === "string" && p.text.trim().length > 0);
+    const hasToolCalls = parts.some((p) => p.type === "tool");
+    const tokens = info.tokens && typeof info.tokens === "object" ? (info.tokens as { input?: unknown; output?: unknown }) : null;
+    const inputTokens = typeof tokens?.input === "number" ? tokens.input : null;
+    const outputTokens = typeof tokens?.output === "number" ? tokens.output : null;
+    const finish = typeof info.finish === "string" ? info.finish : null;
+    const error = info.error && typeof info.error === "object" ? (info.error as { name?: unknown }).name ?? null : null;
+    const completed = !!(info.time && typeof info.time === "object" && (info.time as { completed?: unknown }).completed);
+    // "Empty" means the model was actually called (input tokens counted) and
+    // came back with nothing. A turn aborted before its request went out
+    // also has no parts, but shows input=0 and no finish -- that is a cancel,
+    // not a stall, and must not be retried. In-flight turns are not judged.
+    const empty =
+      completed && !hasText && !hasToolCalls && !error
+      && (inputTokens ?? 0) > 0 && (outputTokens === null || outputTokens === 0);
+    return jsonResponse({
+      ok: true,
+      sessionId,
+      turn: {
+        messageId: typeof info.id === "string" ? info.id : null,
+        agent: typeof info.agent === "string" ? info.agent : null,
+        model:
+          typeof info.providerID === "string" && typeof info.modelID === "string"
+            ? { providerID: info.providerID, modelID: info.modelID }
+            : null,
+        inputTokens,
+        outputTokens,
+        finish,
+        error,
+        completed,
+        hasText,
+        hasToolCalls,
+        empty,
+      },
+    });
+  });
+
   addRoute(routes, "POST", "/experimental/spatial/sessions/:id/prompt", "none", async (ctx) => {
     const activeWorkspace = config.workspaces[0];
     if (!activeWorkspace) throw new ApiError(404, "no_workspace", "No active workspace");
@@ -1580,10 +1643,23 @@ function createRoutes(
       agent?: string;
       model?: { id?: string; modelID?: string; providerID?: string; variant?: string };
     };
+    // Optional explicit pins from the caller. session.agent / session.model
+    // are mutable "last used" pointers that the desktop app overwrites, so a
+    // retry that wants to continue as the SAME persona on the SAME model (see
+    // the empty-turn recovery in the XR client) must say so explicitly.
+    const pinnedAgent = typeof body.agent === "string" && body.agent.trim() ? body.agent.trim() : null;
+    const pinnedModel =
+      body.model && typeof body.model === "object"
+        && typeof (body.model as { providerID?: unknown }).providerID === "string"
+        && typeof (body.model as { modelID?: unknown }).modelID === "string"
+        ? { providerID: (body.model as { providerID: string }).providerID, modelID: (body.model as { modelID: string }).modelID }
+        : null;
+
     const sessionModel = session?.model;
     const modelId = sessionModel?.id ?? sessionModel?.modelID;
     let model =
-      sessionModel?.providerID && modelId ? { providerID: sessionModel.providerID, modelID: modelId } : undefined;
+      pinnedModel
+        ?? (sessionModel?.providerID && modelId ? { providerID: sessionModel.providerID, modelID: modelId } : undefined);
 
     // Fall back to workspace default provider/model if none is set on the session yet
     if (!model) {
@@ -1629,8 +1705,8 @@ function createRoutes(
     const result = await opencode.session.promptAsync({
       sessionID: sessionId,
       ...(model ? { model } : {}),
-      ...(session?.agent ? { agent: session.agent } : {}),
-      ...(sessionModel?.variant ? { variant: sessionModel.variant } : {}),
+      ...((pinnedAgent ?? session?.agent) ? { agent: pinnedAgent ?? session!.agent } : {}),
+      ...(!pinnedModel && sessionModel?.variant ? { variant: sessionModel.variant } : {}),
       parts: [{ type: "text", text }, ...(imagePart ? [imagePart] : [])],
     });
     if (result.error !== undefined) {
