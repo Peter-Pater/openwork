@@ -85,7 +85,7 @@ async function waitForDrainOrClose(nodeRes: ServerResponse): Promise<void> {
 /**
  * Convert a Node.js IncomingMessage into a Web API Request.
  */
-function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number): Request {
+function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number, signal: AbortSignal): Request {
   const url = `http://${hostname}:${port}${nodeReq.url ?? "/"}`;
   const method = nodeReq.method ?? "GET";
   const headers = new Headers();
@@ -112,6 +112,7 @@ function toWebRequest(nodeReq: IncomingMessage, hostname: string, port: number):
     method,
     headers,
     body,
+    signal,
     // @ts-expect-error duplex is required for streaming request bodies in Node
     duplex: hasBody ? "half" : undefined,
   });
@@ -173,8 +174,19 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
       console.error("[serve-node] Response stream error:", error);
     });
 
+    // Bun.serve() aborts `request.signal` when the client goes away; a bare
+    // `new Request()` never does. Long-lived handlers (the spatial SSE feed)
+    // rely on that signal to unsubscribe and stop background polling, so
+    // without it every disconnected client leaked a listener and a heartbeat
+    // timer for the life of the process.
+    const abort = new AbortController();
+    const onClose = () => {
+      if (!abort.signal.aborted) abort.abort();
+    };
+    nodeRes.once("close", onClose);
+
     try {
-      const webReq = toWebRequest(nodeReq, hostname, boundPort);
+      const webReq = toWebRequest(nodeReq, hostname, boundPort, abort.signal);
       const webRes = await fetchHandler(webReq);
       await writeWebResponse(webRes, nodeRes);
     } catch (error) {

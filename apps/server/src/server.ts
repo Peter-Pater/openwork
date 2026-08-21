@@ -20,6 +20,7 @@ import { startReloadWatchers } from "./reload-watcher.js";
 import { opencodeConfigPath, openworkConfigPath, projectCommandsDir, projectSkillsDir } from "./workspace-files.js";
 import { ensureDir, exists, hashToken, shortId } from "./utils.js";
 import { newScanPath, newestScanPath } from "./environments/rooms/room-store.js";
+import { readLibrary } from "./environments/library/store.js";
 import { createArtifactWatcher } from "./environments/artifacts/artifact-watcher.js";
 import {
   artifactFilePath,
@@ -738,6 +739,9 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       // server.close() (which would wedge a restart). The relay's server is a
       // reusable singleton, so this only closes connections, not the relay.
       spatialStreamRelay.disconnectClients();
+      // Module-level spatial state must not outlive this instance -- the
+      // desktop restarts the server in-process (see stopSpatialForRestart).
+      stopSpatialForRestart();
       await server.stop();
     },
   };
@@ -1242,6 +1246,36 @@ let activeListenersCount = 0;
 let pollTimer: any = null;
 let previousSessionsState: Map<string, string> = new Map();
 let eventSubAbortController: AbortController | null = null;
+// Every open /experimental/spatial/events response, so a server restart can
+// close them. Module-level on purpose -- see stopSpatialForRestart().
+const spatialSseConnections = new Set<() => void>();
+let lastPollErrorMessage: string | null = null;
+
+/**
+ * Tears down everything the spatial SSE feature keeps at MODULE scope.
+ *
+ * The desktop app restarts the embedded server IN-PROCESS (stop(), then
+ * startServer() again with a new config and a freshly spawned opencode) and
+ * the ESM import is cached, so this module's state survives the restart.
+ * Without this, the old poll timer keeps polling the old, now-dead opencode
+ * (every tick throws and is swallowed), the old event subscription has ended
+ * and never reconnects, and `activeListenersCount` is still >= 1 -- so the
+ * new instance's first subscriber never restarts either. Net effect: every
+ * avatar goes dark (no busy animation, no despawn on delete) until the whole
+ * app is relaunched. That is exactly what this resets.
+ */
+function stopSpatialForRestart() {
+  for (const close of [...spatialSseConnections]) {
+    try {
+      close();
+    } catch {}
+  }
+  spatialSseConnections.clear();
+  stopSpatialPolling();
+  activeListenersCount = 0;
+  previousSessionsState = new Map();
+  lastPollErrorMessage = null;
+}
 
 // Turns observed webfetch tool parts into stored per-session artifacts (the
 // XR artifact piles). Shares the polling lifecycle below: the broker only
@@ -1286,16 +1320,23 @@ async function startSpatialEventSubscription(config: ServerConfig, activeWorkspa
         }
       }
     }
-  } catch (err) {
-    console.error(`[Spatial Server] Event subscription error:`, err);
+    // The stream ended WITHOUT an error: opencode closed it (engine restart,
+    // idle timeout). Previously this returned silently with the controller
+    // still set, so no reconnect ever happened -- tool parts, questions and
+    // idle events just stopped arriving. Treat it like an error.
     if (!signal.aborted) {
-      eventSubAbortController = null;
-      setTimeout(() => {
-        const ws = config.workspaces[0];
-        if (ws) startSpatialEventSubscription(config, ws);
-      }, 5000);
+      console.warn(`[Spatial Server] Opencode event stream ended; resubscribing in 5s.`);
     }
+  } catch (err) {
+    if (!signal.aborted) console.error(`[Spatial Server] Event subscription error:`, err);
   }
+  if (signal.aborted) return;
+  eventSubAbortController = null;
+  setTimeout(() => {
+    if (eventSubAbortController || !pollTimer) return; // stopped meanwhile
+    const ws = config.workspaces[0];
+    if (ws) void startSpatialEventSubscription(config, ws);
+  }, 5000);
 }
 
 function startSpatialPolling(config: ServerConfig) {
@@ -1312,6 +1353,10 @@ function startSpatialPolling(config: ServerConfig) {
     try {
       const activeWorkspace = config.workspaces[0];
       if (!activeWorkspace) return;
+      // The workspace may be registered after the first subscriber arrived
+      // (the XR page reconnects the instant the port opens), in which case the
+      // subscription above was skipped; pick it up here.
+      if (!eventSubAbortController) void startSpatialEventSubscription(config, activeWorkspace);
 
       const opencode = createWorkspaceOpencodeClient(config, activeWorkspace);
       const [sessionsRes, statusesRes] = await Promise.all([
@@ -1343,8 +1388,17 @@ function startSpatialPolling(config: ServerConfig) {
       }
 
       previousSessionsState = currentSessions;
+      lastPollErrorMessage = null;
     } catch (err) {
-      // Ignore background errors
+      // Background, so never fatal -- but not silent either: a poll that
+      // fails every tick is the difference between avatars that react and
+      // avatars that are frozen, and it used to be invisible. Log each
+      // distinct failure once.
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== lastPollErrorMessage) {
+        lastPollErrorMessage = message;
+        console.error(`[Spatial Server] Session poll failed (will keep retrying): ${message}`);
+      }
     }
   }, 3000);
 }
@@ -1494,6 +1548,13 @@ function createRoutes(
     if (!path) throw new ApiError(404, "not_found", "No room understanding saved");
     const raw = await readFile(path, "utf8");
     return new Response(raw, { headers: { "Content-Type": "application/json" } });
+  });
+
+  // Books the librarian has shelved (see environments/library). The XR client
+  // reads this once on boot to stand the virtual replicas back on the shelf
+  // without re-walking; the library MCP server is what writes it.
+  addRoute(routes, "GET", "/experimental/spatial/library", "none", async () => {
+    return Response.json(readLibrary());
   });
 
   addRoute(routes, "POST", "/experimental/spatial/room", "none", async (ctx) => {
@@ -1907,17 +1968,25 @@ function createRoutes(
           startSpatialPolling(config);
         }
 
-        signal.addEventListener("abort", () => {
+        let closed = false;
+        const close = () => {
+          if (closed) return;
+          closed = true;
           clearInterval(heartbeatInterval);
           spatialEventsBroker.removeListener(listener);
-          activeListenersCount--;
+          spatialSseConnections.delete(close);
+          activeListenersCount = Math.max(0, activeListenersCount - 1);
           if (activeListenersCount === 0) {
             stopSpatialPolling();
           }
           try {
             controller.close();
           } catch (e) {}
-        });
+        };
+        spatialSseConnections.add(close);
+        // Fires on client disconnect (serve-node wires it to the socket's
+        // close) and on server stop via stopSpatialForRestart().
+        signal.addEventListener("abort", close);
       }
     });
 
