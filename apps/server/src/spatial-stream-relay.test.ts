@@ -402,3 +402,24 @@ test("a deck opened by file id is pageable once the outline fetch lands", async 
   expect(calls.at(-1)).toBe("https://docs.google.com/presentation/d/P9/edit#slide=id.b");
   coordinator.dispose();
 });
+
+test("a bare deck URL from the prompt route keeps the page the user turned to", async () => {
+  const calls: string[] = [];
+  const fakeRelay = {
+    requestStartStream: () => calls.push("start"),
+    requestUpdateStream: (_id: string, url: string) => calls.push(url),
+    requestStopStream: () => calls.push("stop"),
+  } as unknown as SpatialStreamRelay;
+  const coordinator = createSpatialStreamCoordinator(fakeRelay);
+  coordinator.setSlideOutlineFetcher(async () => ({ slideIds: ["a", "b", "c"], elementToSlide: {} }));
+  const base = "https://docs.google.com/presentation/d/P5/edit";
+  coordinator.noteSessionUrl("sess-r", base);
+  await new Promise((r) => setTimeout(r, 0));
+  coordinator.stepSlide("sess-r", 2); // user paged to slide 3 while the agent stood by
+  calls.length = 0;
+  coordinator.noteSessionUrl("sess-r", base); // resume prompt carries the fileId -> bare URL
+  expect(calls).toEqual([]); // no re-point: still on slide 3
+  coordinator.noteSessionDoc("sess-r", "P5"); // docs-style URL for a different deck type: unrelated, re-points
+  expect(calls.at(-1)).toContain("/document/d/P5/edit");
+  coordinator.dispose();
+});

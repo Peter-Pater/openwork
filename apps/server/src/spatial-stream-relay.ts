@@ -620,6 +620,14 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
 
   function noteSessionUrl(sessionId: string, url: string): void {
     if (!sessionId || !url) return;
+    // A bare deck URL (no #slide=) from any route -- the resume prompt's
+    // fileId, a read call, the XR client re-opening the screen -- must not
+    // flip the deck back to slide 1: keep whatever page is showing, whether
+    // the agent turned to it or the user did while it stood by.
+    const showing = slideBySession.get(sessionId);
+    if (showing?.current && !url.includes("#") && stripSlideFragment(url) === stripSlideFragment(showing.baseUrl)) {
+      url = slideUrl(showing.baseUrl, showing.current);
+    }
     noteSessionTarget(sessionId, { kind: "browser", url });
     // A deck put on screen by any route (the XR client opening it by file
     // id, a prompt carrying fileId) is pageable from the moment it shows:
@@ -763,11 +771,8 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       const action = asString(b.action);
       const url = googleWorkspaceViewUrl(action, b.args, callResult);
       if (!url) return;
-      // Keep the window on the slide it is already showing when the agent
-      // merely reads the deck; an edit moves it below.
-      const state = slideBySession.get(sessionId);
-      const keep = state && stripSlideFragment(url) === stripSlideFragment(state.baseUrl) && state.current;
-      noteSessionUrl(sessionId, keep ? slideUrl(state.baseUrl, state.current as string) : url);
+      // noteSessionUrl keeps the slide already showing; an edit moves it below.
+      noteSessionUrl(sessionId, url);
       if (action.startsWith("slides_")) noteSlidesCall(sessionId, action, b.args, callResult, url);
     },
     noteSessionComputerUse(sessionId) {
