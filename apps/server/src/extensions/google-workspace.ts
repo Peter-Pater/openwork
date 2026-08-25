@@ -296,6 +296,7 @@ export const GOOGLE_WORKSPACE_EXTENSION_ACTIONS = [
             'new slide {"createSlide":{"slideLayoutReference":{"predefinedLayout":"TITLE_AND_BODY"}}}; ' +
             'insert text into a shape {"insertText":{"objectId":"<shapeId>","insertionIndex":0,"text":"Hello"}}; ' +
             'add image {"createImage":{"url":"https://...","elementProperties":{"pageObjectId":"<slideId>","size":{"width":{"magnitude":300,"unit":"PT"},"height":{"magnitude":200,"unit":"PT"}},"transform":{"scaleX":1,"scaleY":1,"translateX":100,"translateY":100,"unit":"PT"}}}} (URL must be publicly fetchable); ' +
+            'swap an existing picture {"replaceImage":{"imageObjectId":"<imageElementId>","url":"https://...","imageReplaceMethod":"CENTER_CROP"}}; ' +
             'move/resize {"updatePageElementTransform":{"objectId":"<elementId>","transform":{"scaleX":1,"scaleY":1,"translateX":100,"translateY":100,"unit":"PT"},"applyMode":"ABSOLUTE"}}; ' +
             'delete {"deleteObject":{"objectId":"<id>"}}. ' +
             "Get slide and element objectIds from slides_read_presentation first.",

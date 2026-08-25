@@ -32,6 +32,12 @@ type QuestionAction =
   | { type: "advance"; answers: string[][] }
   | { type: "setAnswers"; answers: string[][] };
 
+const IMAGE_URL_RE = /^https?:\/\/\S+$/i;
+
+function isImageUrl(value: string): boolean {
+  return IMAGE_URL_RE.test(value.trim());
+}
+
 const initialQuestionState: QuestionState = {
   currentIndex: 0,
   answers: [],
@@ -198,7 +204,16 @@ export function QuestionPanel(props: QuestionPanelProps) {
                 >
                   <span className="min-w-0">
                     <span className="block font-medium text-gray-12">{opt.label}</span>
-                    {opt.description && opt.description !== opt.label ? (
+                    {opt.description && isImageUrl(opt.description) ? (
+                      // A bare http(s) URL as the description is a picture option (the
+                      // spatial client renders the same convention as an image tile).
+                      <img
+                        src={opt.description.trim()}
+                        alt={opt.label}
+                        loading="lazy"
+                        className="mt-1 max-h-40 rounded-lg object-contain"
+                      />
+                    ) : opt.description && opt.description !== opt.label ? (
                       <span className="mt-1 block text-xs leading-5 text-gray-11">{opt.description}</span>
                     ) : null}
                   </span>
