@@ -119,6 +119,14 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     ws = socket;
     socket.on("open", () => {
       rpc("captureController", "register", []);
+      // The relay ends every stream a dropped socket was sending, so the XR
+      // panels are gone; the captures here are still running. Re-announce
+      // them so the receivers pick the streams straight back up.
+      for (const [sessionId, entry] of sessions) {
+        if (!entry.info) continue;
+        rpc("streamManager", "start_stream", [sessionId, entry.info]);
+        console.log(`[spatial-capture] re-announced session ${sessionId} after reconnect`);
+      }
     });
     socket.on("message", (data, isBinary) => {
       if (!isBinary) handleText(data.toString());
@@ -308,6 +316,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
         entry.started = true;
         const width = Math.round(params.metadata?.deviceWidth || CAPTURE_WIDTH);
         const height = Math.round(params.metadata?.deviceHeight || CAPTURE_HEIGHT);
+        entry.info = { width, height };
         rpc("streamManager", "start_stream", [sessionId, { width, height }]);
       }
       // Drop frames above the cap, but always ack -- CDP stalls the screencast
@@ -419,6 +428,7 @@ export function createSpatialStreamCapture({ getServerUrl }) {
       entry.started = true;
       const width = Math.round(payload.width || SCREEN_MAX_WIDTH);
       const height = Math.round(payload.height || 800);
+      entry.info = { width, height };
       rpc("streamManager", "start_stream", [sessionId, { width, height }]);
       console.log(`[spatial-capture] first screen frame for session ${sessionId} (${width}x${height})`);
     }
@@ -441,6 +451,22 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     }
   }
 
+  // Same document ignoring the fragment and the `slide` query param the Slides
+  // editor mirrors its current page into (`/edit?slide=id.X#slide=id.X`).
+  function samePage(a, b) {
+    const norm = (raw) => {
+      try {
+        const u = new URL(raw);
+        u.hash = "";
+        u.searchParams.delete("slide");
+        return u.toString();
+      } catch {
+        return raw.split("#")[0];
+      }
+    };
+    return norm(a) === norm(b);
+  }
+
   // Re-point an already-open capture window at a new URL (agent switched docs).
   // The screencast keeps running on the same webContents, so the XR panel stays
   // mounted and just shows the new page — no stream restart, no panel flicker.
@@ -453,7 +479,17 @@ export function createSpatialStreamCapture({ getServerUrl }) {
     }
     if (entry.kind !== "browser") return; // screen streams have no URL to re-point
     try {
-      await entry.win.webContents.loadURL(url);
+      const contents = entry.win.webContents;
+      // Same page, different fragment: Google Slides routes the shown slide
+      // through `#slide=id.X` and reacts to a hash change in place, so set
+      // the hash instead of reloading (a loadURL would flash the editor).
+      const hashAt = url.indexOf("#");
+      if (hashAt !== -1 && samePage(contents.getURL(), url)) {
+        await contents.executeJavaScript(`location.hash = ${JSON.stringify(url.slice(hashAt + 1))}; undefined`, true);
+        console.log(`[spatial-capture] moved session ${sessionId} → ${url.slice(hashAt)}`);
+        return;
+      }
+      await contents.loadURL(url);
       console.log(`[spatial-capture] re-pointed session ${sessionId} → ${url}`);
     } catch (e) {
       console.warn(`[spatial-capture] updateStream loadURL failed for ${sessionId}:`, e?.message ?? e);

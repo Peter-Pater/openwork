@@ -7,6 +7,9 @@ import {
   createSpatialStreamRelay,
   createSpatialStreamCoordinator,
   googleWorkspaceViewUrl,
+  lastSlideMention,
+  slideOutlineFromPresentation,
+  slideTargetFromCall,
   type SpatialStreamRelay,
 } from "./spatial-stream-relay.js";
 import { spatialEventsBroker } from "./events.js";
@@ -302,4 +305,100 @@ test("requestStartStream relays a control RPC to the capture controller", async 
 
     controller.close();
   });
+});
+
+const DECK = slideOutlineFromPresentation({
+  slides: [
+    { objectId: "s1", pageElements: [{ objectId: "title1" }] },
+    { objectId: "s2", pageElements: [{ objectId: "body2" }] },
+    { objectId: "s3" },
+  ],
+});
+
+test("slideOutlineFromPresentation keeps slide order and maps elements to slides", () => {
+  expect(DECK).toEqual({ slideIds: ["s1", "s2", "s3"], elementToSlide: { title1: "s1", body2: "s2" } });
+  expect(slideOutlineFromPresentation({ presentationId: "p" })).toBeNull();
+  expect(slideOutlineFromPresentation(null)).toBeNull();
+});
+
+test("slideTargetFromCall picks the last request that names a slide", () => {
+  const act = "slides_update_presentation";
+  // explicit createSlide id (the agent chose it)
+  expect(slideTargetFromCall(act, { requests: [{ createSlide: { objectId: "new_slide_cat" } }] }, null, DECK)).toBe("new_slide_cat");
+  // generated id comes back in the matching reply
+  const reqs = [{ insertText: { objectId: "title1", text: "x" } }, { createSlide: { insertionIndex: 3 } }];
+  const res = { result: { replies: [{}, { createSlide: { objectId: "SLIDES_API1_0" } }] } };
+  expect(slideTargetFromCall(act, { requests: reqs }, res, DECK)).toBe("SLIDES_API1_0");
+  // element edits resolve to their slide; later requests win
+  expect(slideTargetFromCall(act, { requests: [{ insertText: { objectId: "title1" } }, { insertText: { objectId: "body2" } }] }, null, DECK)).toBe("s2");
+  // pageObjectId on a new element
+  expect(slideTargetFromCall(act, { requests: [{ createImage: { url: "u", elementProperties: { pageObjectId: "s3" } } }] }, null, DECK)).toBe("s3");
+  // replaceImage names the element as imageObjectId; replaceAllShapesWithImage lists pages
+  expect(slideTargetFromCall(act, { requests: [{ replaceImage: { imageObjectId: "body2", url: "u" } }] }, null, DECK)).toBe("s2");
+  expect(slideTargetFromCall(act, { requests: [{ replaceAllShapesWithImage: { pageObjectIds: ["s3"], imageUrl: "u" } }] }, null, DECK)).toBe("s3");
+  // deleting a slide names it directly
+  expect(slideTargetFromCall(act, { requests: [{ deleteObject: { objectId: "s1" } }] }, null, DECK)).toBe("s1");
+  // unknown element without an outline: nothing
+  expect(slideTargetFromCall(act, { requests: [{ insertText: { objectId: "ghost" } }] }, null, null)).toBeNull();
+  expect(slideTargetFromCall("slides_read_presentation", { presentationId: "p" }, null, DECK)).toBeNull();
+});
+
+test("coordinator follows the edited slide and pages the deck while waiting", () => {
+  const calls: Array<{ op: string; id: string; url?: string; target?: unknown }> = [];
+  const fakeRelay = {
+    requestStartStream: (id: string, target: unknown) => calls.push({ op: "start", id, target }),
+    requestUpdateStream: (id: string, url: string) => calls.push({ op: "update", id, url }),
+    requestStopStream: (id: string) => calls.push({ op: "stop", id }),
+  } as unknown as SpatialStreamRelay;
+  const coordinator = createSpatialStreamCoordinator(fakeRelay);
+  const ctx = { context: { sessionId: "sess-s" }, extensionId: "google-workspace" };
+  const base = "https://docs.google.com/presentation/d/P1/edit";
+
+  // read gives the outline; window opens on the plain edit URL
+  coordinator.noteExtensionCall({ ...ctx, action: "slides_read_presentation", args: { presentationId: "P1" } }, {
+    result: { presentationId: "P1", slides: [{ objectId: "s1" }, { objectId: "s2", pageElements: [{ objectId: "body2" }] }, { objectId: "s3" }] },
+  });
+  expect(calls).toEqual([{ op: "start", id: "sess-s", target: { kind: "browser", url: base } }]);
+
+  // an edit re-points the same window at the edited slide
+  coordinator.noteExtensionCall({ ...ctx, action: "slides_update_presentation", args: { presentationId: "P1", requests: [{ insertText: { objectId: "body2", text: "hi" } }] } }, { result: { replies: [{}] } });
+  expect(calls.at(-1)).toEqual({ op: "update", id: "sess-s", url: `${base}#slide=id.s2` });
+
+  // a later read does not yank the screen back to slide 1
+  calls.length = 0;
+  coordinator.noteExtensionCall({ ...ctx, action: "slides_read_presentation", args: { presentationId: "P1" } }, { result: { presentationId: "P1", slides: [{ objectId: "s1" }, { objectId: "s2" }, { objectId: "s3" }] } });
+  expect(calls).toEqual([]);
+
+  // paging: clamps at both ends
+  expect(coordinator.stepSlide("sess-s", 1)).toEqual({ ok: true, index: 2, count: 3 });
+  expect(calls.at(-1)?.url).toBe(`${base}#slide=id.s3`);
+  expect(coordinator.stepSlide("sess-s", 1)).toEqual({ ok: true, index: 2, count: 3 });
+  expect(coordinator.stepSlide("sess-s", -5)).toEqual({ ok: true, index: 0, count: 3 });
+  expect(calls.at(-1)?.url).toBe(`${base}#slide=id.s1`);
+  // no deck on this session
+  expect(coordinator.stepSlide("sess-doc", 1)).toEqual({ ok: false });
+  coordinator.dispose();
+});
+
+test("lastSlideMention picks the last slide the text names", () => {
+  expect(lastSlideMention("I'm now focused on slide 2 and then Slide #4 needs an image")).toBe(4);
+  expect(lastSlideMention("The third slide has three images")).toBe(3);
+  expect(lastSlideMention("The deck has 5 slides")).toBeNull();
+  expect(lastSlideMention("")).toBeNull();
+});
+
+test("a deck opened by file id is pageable once the outline fetch lands", async () => {
+  const calls: string[] = [];
+  const fakeRelay = {
+    requestStartStream: () => calls.push("start"),
+    requestUpdateStream: (_id: string, url: string) => calls.push(url),
+    requestStopStream: () => calls.push("stop"),
+  } as unknown as SpatialStreamRelay;
+  const coordinator = createSpatialStreamCoordinator(fakeRelay);
+  coordinator.setSlideOutlineFetcher(async (id) => (id === "P9" ? { slideIds: ["a", "b"], elementToSlide: {} } : null));
+  coordinator.noteSessionUrl("sess-open", "https://docs.google.com/presentation/d/P9/edit");
+  await new Promise((r) => setTimeout(r, 0));
+  expect(coordinator.stepSlide("sess-open", 1)).toEqual({ ok: true, index: 1, count: 2 });
+  expect(calls.at(-1)).toBe("https://docs.google.com/presentation/d/P9/edit#slide=id.b");
+  coordinator.dispose();
 });

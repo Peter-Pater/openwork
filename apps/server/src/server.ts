@@ -64,7 +64,7 @@ import {
 import { serve, type ServeResult } from "./serve-node.js";
 // Only googleWorkspaceListFiles is still used inline here (token-less /files
 // route); the other google-workspace + extension actions moved into core.ts.
-import { googleWorkspaceListFiles } from "./extensions/google-workspace.js";
+import { googleWorkspaceListFiles, fetchGoogleSlidesOutline } from "./extensions/google-workspace.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerOperationRoutes } from "./routes/operations.js";
@@ -565,6 +565,7 @@ function isSessionCommandProxyRequest(method: string, proxyPath: string) {
 }
 
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
+  spatialStreamCoordinator.setSlideOutlineFetcher((presentationId) => fetchGoogleSlidesOutline(config, presentationId));
   const approvals = new ApprovalService(config.approval);
   const reloadEvents = new ReloadEventStore();
   const tokens = new TokenService(config);

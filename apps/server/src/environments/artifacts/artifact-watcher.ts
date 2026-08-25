@@ -106,6 +106,28 @@ const URL_RE = /https?:\/\/[^\s"'\\<>]+/g;
  * http(s) URLs inside a JSON-stringified tool input. The regex ends a URL at
  * quotes, whitespace, or JSON escapes; trailing punctuation is then trimmed.
  */
+/**
+ * URLs that are machine endpoints, not pages -- an API query, a JSON/XML
+ * feed. A webfetch of one is the agent reading data, and a screenshot of
+ * the raw response (a wall of JSON) is noise in the pile. Heuristic on the
+ * URL; the desktop also checks the loaded document's MIME type.
+ */
+export function looksLikeDataEndpoint(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    if (/\.(json|xml|rss|atom|csv|txt)$/.test(path)) return true;
+    if (/(^|\/)(api|rest|graphql)(\/|\.php$|$)/.test(path)) return true;
+    const params = u.searchParams;
+    const format = (params.get("format") ?? params.get("output") ?? "").toLowerCase();
+    if (format === "json" || format === "xml") return true;
+    if (params.has("action") && params.has("list")) return true; // MediaWiki API
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function extractUrls(value: unknown): string[] {
   let text: string;
   try {
@@ -187,6 +209,10 @@ export function createArtifactWatcher(channel: ArtifactCaptureChannel): Artifact
       const url = typeof part.state?.input?.url === "string" ? part.state.input.url.trim() : "";
       if (!/^https?:\/\//i.test(url)) {
         console.log(`[Artifacts] webfetch part without a usable url (callID ${callID}); skipped.`);
+        return;
+      }
+      if (looksLikeDataEndpoint(url)) {
+        console.log(`[Artifacts] ${url} looks like an API/data endpoint, not a page; skipped.`);
         return;
       }
       requestCapture(sessionId, url, false);

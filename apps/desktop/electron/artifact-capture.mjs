@@ -223,6 +223,19 @@ export function createArtifactCapture() {
     });
 
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    // A JSON/XML/plain-text response renders as a wall of raw text, and a
+    // screenshot of that is not an artifact. Chromium wraps such responses
+    // in a document whose contentType still says what it was.
+    let contentType = "";
+    try {
+      contentType = String(await contents.executeJavaScript("document.contentType", true));
+    } catch {
+      /* cross-origin quirk; treat as html */
+    }
+    if (contentType && !/html/i.test(contentType)) {
+      contents.loadURL("about:blank").catch(() => {});
+      throw new Error(`not a page (${contentType})`);
+    }
     const image = await contents.capturePage();
     const png = image.toPNG();
     if (png.length > MAX_BYTES) throw new Error("snapshot exceeds size cap");

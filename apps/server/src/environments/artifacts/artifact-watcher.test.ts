@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { spatialEventsBroker } from "../../events.js";
 
-import { createArtifactWatcher, extractUrls, type ArtifactWatcher } from "./artifact-watcher.js";
+import { createArtifactWatcher, extractUrls, looksLikeDataEndpoint, type ArtifactWatcher } from "./artifact-watcher.js";
 import { readIndex } from "./session-artifact-store.js";
 
 let dataDir: string;
@@ -237,4 +237,14 @@ describe("artifacts: extension-call trigger (image-only)", () => {
     watcher!.ingest(channel.calls[1].requestId, { ok: true, kind: "page", base64: PNG_B64 });
     expect(readIndex("ses_ext1")).toHaveLength(1);
   });
+});
+
+test("looksLikeDataEndpoint flags API and feed URLs, not pages", () => {
+  expect(looksLikeDataEndpoint("https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch=x&format=json")).toBe(true);
+  expect(looksLikeDataEndpoint("https://example.com/api/v1/items")).toBe(true);
+  expect(looksLikeDataEndpoint("https://example.com/data.json")).toBe(true);
+  expect(looksLikeDataEndpoint("https://example.com/feed.xml")).toBe(true);
+  expect(looksLikeDataEndpoint("https://en.wikipedia.org/wiki/Belgium")).toBe(false);
+  expect(looksLikeDataEndpoint("https://www.fifa.com/tournaments/mens/worldcup/2026")).toBe(false);
+  expect(looksLikeDataEndpoint("https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/x.jpg/500px-x.jpg")).toBe(false);
 });

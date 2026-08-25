@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { ApiError } from "../errors.js";
 import type { ServerConfig } from "../types.js";
 import { spatialEventsBroker } from "../events.js";
+import { slideOutlineFromPresentation } from "../spatial-stream-relay.js";
 
 export const GOOGLE_WORKSPACE_EXTENSION_ID = "google-workspace";
 
@@ -1053,6 +1054,24 @@ async function googleWorkspaceReadPresentation(config: ServerConfig, args: Recor
   return fetchGoogleJson(`https://slides.googleapis.com/v1/presentations/${encodeURIComponent(presentationId)}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+}
+
+/**
+ * Slide order + element ids of a deck, for the spatial screen to follow the
+ * slide an agent edits and to page through while it waits (see
+ * spatial-stream-relay.ts). Narrow `fields` mask: this runs after every
+ * batchUpdate. Null when Workspace is not connected or the call fails.
+ */
+export async function fetchGoogleSlidesOutline(config: ServerConfig, presentationId: string): Promise<{ slideIds: string[]; elementToSlide: Record<string, string> } | null> {
+  if (!presentationId) return null;
+  try {
+    const { accessToken } = await googleWorkspaceAccessToken(config);
+    const url = `https://slides.googleapis.com/v1/presentations/${encodeURIComponent(presentationId)}?fields=${encodeURIComponent("slides(objectId,pageElements.objectId)")}`;
+    const presentation = await fetchGoogleJson(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    return slideOutlineFromPresentation(presentation);
+  } catch {
+    return null;
+  }
 }
 
 async function googleWorkspaceUpdatePresentation(config: ServerConfig, args: Record<string, unknown>) {

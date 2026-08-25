@@ -67,6 +67,12 @@ export type SpatialStreamRelay = {
   requestCaptureArtifact(requestId: string, url: string, options?: { imageOnly?: boolean }): void;
   /** Route incoming `artifactStore.ingest` calls (from Electron) to a handler. */
   setArtifactIngestHandler(handler: ((requestId: string, payload: unknown) => void) | null): void;
+  /**
+   * Route incoming `screenControl.stepSlide(sessionId, delta)` calls (from an
+   * XR receiver paging a waiting agent's deck) to a handler; the handler's
+   * return value is the RPC reply.
+   */
+  setScreenControlHandler(handler: ((sessionId: string, delta: number) => unknown) | null): void;
   /** Whether at least one capture controller is currently connected. */
   hasController(): boolean;
   /** Terminate all live sockets (keeps the server reusable across restarts). */
@@ -98,6 +104,7 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
   const streams = new Map<string, StreamEntry>();
   const controllers = new Set<WebSocket>();
   let artifactIngestHandler: ((requestId: string, payload: unknown) => void) | null = null;
+  let screenControlHandler: ((sessionId: string, delta: number) => unknown) | null = null;
 
   function endStream(streamId: string, sender: WebSocket | null): void {
     const entry = streams.get(streamId);
@@ -177,6 +184,18 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
         }
         reply(ws, msg.id, { ok: true });
       }
+    } else if (params.target === "screenControl") {
+      // An XR receiver paging the deck shown on a waiting agent's screen.
+      if (params.func === "stepSlide") {
+        const delta = Number(args[1]);
+        let result: unknown = { ok: false };
+        try {
+          result = screenControlHandler?.(String(args[0] ?? ""), Number.isFinite(delta) ? delta : 0) ?? { ok: false };
+        } catch (err) {
+          console.error("[SpatialStream] screenControl handler failed:", err);
+        }
+        reply(ws, msg.id, result);
+      }
     }
   }
 
@@ -252,6 +271,9 @@ export function createSpatialStreamRelay(): SpatialStreamRelay {
     setArtifactIngestHandler(handler) {
       artifactIngestHandler = handler;
     },
+    setScreenControlHandler(handler) {
+      screenControlHandler = handler;
+    },
     hasController() {
       return controllers.size > 0;
     },
@@ -314,7 +336,7 @@ export type SpatialStreamCoordinator = {
    */
   noteSessionComputerUse(sessionId: string): void;
   /**
-   * Keep a session's stream alive through its next idle/retry transition --
+   * Keep a session's stream alive through its next idle transition --
    * used by the busy-interruption abort call so the avatar's screen doesn't
    * disappear while the user decides what to prompt next. Idempotent;
    * release with releaseHold once a new prompt is sent.
@@ -329,8 +351,159 @@ export type SpatialStreamCoordinator = {
    * transition coming to tear the stream down naturally.
    */
   stopSession(sessionId: string): void;
+  /**
+   * Page the deck on a session's screen by `delta` slides (clamped to the
+   * known slide order). Used while the agent is waiting for input; while it
+   * works, the screen follows the slide the agent edits instead. Returns
+   * `{ ok: false }` when the session has no presentation on screen.
+   */
+  stepSlide(sessionId: string, delta: number): { ok: boolean; index?: number; count?: number };
+  /**
+   * Install the Slides API reader used to learn a deck's slide order (needs a
+   * server config, which the module singleton does not have). Without one the
+   * screen still follows explicit `createSlide` ids, but cannot resolve
+   * element ids to their slide or page a deck the agent never read.
+   */
+  setSlideOutlineFetcher(fetcher: ((presentationId: string) => Promise<SlideOutline | null>) | null): void;
   dispose(): void;
 };
+
+/** Ordered slides of a presentation with the ids of the elements on each. */
+export type SlideOutline = { slideIds: string[]; elementToSlide: Record<string, string> };
+
+/**
+ * Builds a SlideOutline from a Slides API `Presentation` resource (as returned
+ * by `presentations.get`, possibly narrowed with a `fields` mask). Null when
+ * the payload has no `slides` array.
+ */
+export function slideOutlineFromPresentation(presentation: unknown): SlideOutline | null {
+  if (!presentation || typeof presentation !== "object") return null;
+  const slides = (presentation as Record<string, unknown>).slides;
+  if (!Array.isArray(slides)) return null;
+  const slideIds: string[] = [];
+  const elementToSlide: Record<string, string> = {};
+  for (const slide of slides) {
+    if (!slide || typeof slide !== "object") continue;
+    const id = asString((slide as Record<string, unknown>).objectId);
+    if (!id) continue;
+    slideIds.push(id);
+    const elements = (slide as Record<string, unknown>).pageElements;
+    if (!Array.isArray(elements)) continue;
+    for (const el of elements) {
+      const elId = el && typeof el === "object" ? asString((el as Record<string, unknown>).objectId) : "";
+      if (elId) elementToSlide[elId] = id;
+    }
+  }
+  return { slideIds, elementToSlide };
+}
+
+/**
+ * The slide a `slides_update_presentation` call worked on: the target of the
+ * LAST request in the batch that names one (later requests are what the
+ * agent is "on"). A request names a slide directly (`createSlide.objectId`,
+ * `deleteObject.objectId` of a slide, `elementProperties.pageObjectId`) or
+ * through an element it edits (`insertText.objectId`, ...), which is resolved
+ * via `outline.elementToSlide`. A `createSlide` without an explicit id takes
+ * the generated one from the matching `replies[i]`. Returns the page object
+ * id, or null when nothing in the batch can be tied to a slide.
+ */
+export function slideTargetFromCall(action: string, args: unknown, callResult: unknown, outline: SlideOutline | null): string | null {
+  if (action !== "slides_update_presentation") return null;
+  const requests = args && typeof args === "object" ? (args as Record<string, unknown>).requests : undefined;
+  if (!Array.isArray(requests)) return null;
+  const result = callResult && typeof callResult === "object" ? (callResult as Record<string, unknown>).result : undefined;
+  const replies = result && typeof result === "object" && Array.isArray((result as Record<string, unknown>).replies)
+    ? ((result as Record<string, unknown>).replies as unknown[])
+    : [];
+  const slideSet = new Set(outline?.slideIds ?? []);
+  const toSlide = (objectId: string): string | null => {
+    if (!objectId) return null;
+    if (slideSet.has(objectId)) return objectId;
+    return outline?.elementToSlide[objectId] ?? null;
+  };
+  for (let i = requests.length - 1; i >= 0; i--) {
+    const req = requests[i];
+    if (!req || typeof req !== "object") continue;
+    const r = req as Record<string, unknown>;
+    const createSlide = r.createSlide;
+    if (createSlide && typeof createSlide === "object") {
+      const explicit = asString((createSlide as Record<string, unknown>).objectId);
+      if (explicit) return explicit;
+      const reply = replies[i];
+      const created = reply && typeof reply === "object" ? (reply as Record<string, unknown>).createSlide : undefined;
+      const generated = created && typeof created === "object" ? asString((created as Record<string, unknown>).objectId) : "";
+      if (generated) return generated;
+      continue;
+    }
+    for (const body of Object.values(r)) {
+      const page = slideFromRequestBody(body, toSlide);
+      if (page) return page;
+    }
+  }
+  return null;
+}
+
+// Slides requests name their target under many keys (`objectId`,
+// `imageObjectId`, `tableObjectId`, `elementProperties.pageObjectId`,
+// `pageObjectIds`, ...). Walk the body and try every `*ObjectId(s)` string as
+// a slide or an element on one; a page reference wins over an element one.
+function slideFromRequestBody(body: unknown, toSlide: (objectId: string) => string | null): string | null {
+  if (!body || typeof body !== "object") return null;
+  let viaElement: string | null = null;
+  const visit = (node: unknown): string | null => {
+    if (!node || typeof node !== "object") return null;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      const isIdKey = /objectids?$/i.test(key);
+      if (isIdKey && typeof value === "string") {
+        if (/^page/i.test(key)) return value;
+        viaElement = viaElement ?? toSlide(value);
+      } else if (isIdKey && Array.isArray(value)) {
+        const first = value.find((v) => typeof v === "string") as string | undefined;
+        if (first && /^page/i.test(key)) return first;
+        if (first) viaElement = viaElement ?? toSlide(first);
+      } else if (value && typeof value === "object") {
+        const nested = visit(value);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  };
+  return visit(body) ?? viaElement;
+}
+
+const ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+const SLIDE_MENTION_RE = new RegExp(`\\bslide\\s*#?\\s*(\\d{1,3})\\b|\\b(${ORDINALS.join("|")})\\s+slide\\b`, "gi");
+
+/**
+ * The 1-based slide number the text mentions last ("slide 3", "the third
+ * slide"), or null. Used on the agent's reasoning so the screen turns to the
+ * slide it is looking at, not only the one it eventually edits.
+ */
+export function lastSlideMention(text: string): number | null {
+  let last: number | null = null;
+  for (const m of text.matchAll(SLIDE_MENTION_RE)) {
+    const n = m[1] ? Number(m[1]) : ORDINALS.indexOf(m[2].toLowerCase()) + 1;
+    if (n > 0) last = n;
+  }
+  return last;
+}
+
+function presentationIdFromUrl(url: string): string | null {
+  const m = /^https:\/\/docs\.google\.com\/presentation\/(?:u\/\d+\/)?d\/([^/?#]+)/.exec(url);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+const SLIDE_FRAGMENT_PREFIX = "#slide=id.";
+
+/** Strip any `#slide=id.X` fragment so equal decks compare equal. */
+function stripSlideFragment(url: string): string {
+  const hash = url.indexOf("#");
+  return hash === -1 ? url : url.slice(0, hash);
+}
+
+function slideUrl(baseUrl: string, pageObjectId: string): string {
+  return `${stripSlideFragment(baseUrl)}${SLIDE_FRAGMENT_PREFIX}${encodeURIComponent(pageObjectId)}`;
+}
 
 function googleDocUrl(fileId: string): string {
   return `https://docs.google.com/document/d/${encodeURIComponent(fileId)}/edit`;
@@ -406,6 +579,11 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
   const streaming = new Set<string>(); // sessionIds with a live stream request
   const sawBusy = new Set<string>(); // sessionIds observed busy since last note
   const held = new Set<string>(); // sessionIds whose stream survives an idle transition (interrupted, not finished)
+  // sessionId -> the deck on its screen. Kept across idle (the screen stays up
+  // while the agent waits for input) and dropped with the session.
+  type SlideState = { presentationId: string; baseUrl: string; outline: SlideOutline | null; current: string | null; refreshing: boolean };
+  const slideBySession = new Map<string, SlideState>();
+  let slideOutlineFetcher: ((presentationId: string) => Promise<SlideOutline | null>) | null = null;
 
   function startIfReady(sessionId: string): void {
     const target = targetBySession.get(sessionId);
@@ -443,12 +621,74 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
   function noteSessionUrl(sessionId: string, url: string): void {
     if (!sessionId || !url) return;
     noteSessionTarget(sessionId, { kind: "browser", url });
+    // A deck put on screen by any route (the XR client opening it by file
+    // id, a prompt carrying fileId) is pageable from the moment it shows:
+    // learn its slide order now rather than waiting for the agent to read
+    // it -- an interruption early in a run must still leave a browsable deck.
+    const presentationId = presentationIdFromUrl(url);
+    if (!presentationId) return;
+    const state = slideStateFor(sessionId, presentationId, url);
+    if (!state.outline) refreshOutline(sessionId, state);
   }
 
   function stop(sessionId: string): void {
     if (!streaming.has(sessionId)) return;
     streaming.delete(sessionId);
     relay.requestStopStream(sessionId);
+  }
+
+  function slideStateFor(sessionId: string, presentationId: string, baseUrl: string): SlideState {
+    let state = slideBySession.get(sessionId);
+    if (!state || state.presentationId !== presentationId) {
+      state = { presentationId, baseUrl, outline: null, current: null, refreshing: false };
+      slideBySession.set(sessionId, state);
+    }
+    return state;
+  }
+
+  // Re-read the slide order after an edit (fire-and-forget; one in flight per
+  // session, a failure just keeps the previous outline). Also re-derives the
+  // current slide for an edit that could not be resolved before the outline
+  // arrived (an insertText on an element of a slide we had not seen yet).
+  function refreshOutline(sessionId: string, state: SlideState, pending?: { action: string; args: unknown; callResult: unknown }): void {
+    if (!slideOutlineFetcher || state.refreshing) return;
+    state.refreshing = true;
+    slideOutlineFetcher(state.presentationId)
+      .then((outline) => {
+        if (slideBySession.get(sessionId) !== state) return;
+        if (outline) state.outline = outline;
+        if (pending && outline) {
+          const page = slideTargetFromCall(pending.action, pending.args, pending.callResult, outline);
+          if (page) showSlide(sessionId, state, page);
+        }
+      })
+      .catch((err) => console.warn(`[SpatialStream] slide outline refresh failed for ${state.presentationId}:`, err?.message ?? err))
+      .finally(() => {
+        state.refreshing = false;
+      });
+  }
+
+  function showSlide(sessionId: string, state: SlideState, pageObjectId: string): void {
+    if (state.current !== pageObjectId) console.log(`[SpatialStream] ${sessionId}: screen -> slide ${pageObjectId}`);
+    state.current = pageObjectId;
+    noteSessionUrl(sessionId, slideUrl(state.baseUrl, pageObjectId));
+  }
+
+  function noteSlidesCall(sessionId: string, action: string, args: unknown, callResult: unknown, baseUrl: string): void {
+    const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const result = callResult && typeof callResult === "object" ? (callResult as Record<string, unknown>).result : undefined;
+    const presentationId = asString(a.presentationId) || (result && typeof result === "object" ? asString((result as Record<string, unknown>).presentationId) : "");
+    if (!presentationId) return;
+    const state = slideStateFor(sessionId, presentationId, baseUrl);
+    // read/create return the whole Presentation resource: a free outline.
+    const fromResult = action === "slides_read_presentation" || action === "slides_create_presentation" ? slideOutlineFromPresentation(result) : null;
+    if (fromResult) state.outline = fromResult;
+    if (action !== "slides_update_presentation") return;
+    const page = slideTargetFromCall(action, args, callResult, state.outline);
+    if (page) showSlide(sessionId, state, page);
+    // The batch changed the deck (new slides, new elements): learn the new
+    // shape, and resolve the target now if the stale outline could not.
+    refreshOutline(sessionId, state, page ? undefined : { action, args, callResult });
   }
 
   const listener = (event: any) => {
@@ -458,6 +698,14 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       const part = event.properties?.part ?? event.part;
       if (part?.type === "tool" && part.sessionID && isComputerUseTool(part.tool)) {
         noteSessionTarget(part.sessionID, { kind: "screen" });
+      }
+      // The agent thinking about "slide 3": turn to it while it inspects,
+      // ahead of any edit (which re-points precisely by id when it lands).
+      if (part?.type === "reasoning" && part.sessionID && typeof part.text === "string") {
+        const state = slideBySession.get(part.sessionID);
+        const ids = state?.outline?.slideIds ?? [];
+        const n = ids.length ? lastSlideMention(part.text) : null;
+        if (state && n && n <= ids.length) showSlide(part.sessionID, state, ids[n - 1]);
       }
       return;
     }
@@ -470,6 +718,7 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       targetBySession.delete(sessionId);
       sawBusy.delete(sessionId);
       held.delete(sessionId);
+      slideBySession.delete(sessionId);
       stop(sessionId);
       return;
     }
@@ -478,7 +727,11 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
     if (status === "busy") {
       sawBusy.add(sessionId);
       startIfReady(sessionId);
-    } else if (status === "idle" || status === "retry") {
+    } else if (status === "idle") {
+      // (`retry` -- opencode backing off from a provider error before the
+      // same run continues -- is deliberately not here: the run is paused,
+      // not finished, and tearing the window down would blank the XR screen
+      // for the backoff and remount it on resume.)
       // A held session (busy-interruption abort in flight) keeps its stream
       // regardless -- this idle is a pause, not completion.
       if (held.has(sessionId)) return;
@@ -507,8 +760,15 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       const context = b.context && typeof b.context === "object" ? (b.context as Record<string, unknown>) : {};
       const sessionId = asString(context.sessionId);
       if (!sessionId) return;
-      const url = googleWorkspaceViewUrl(asString(b.action), b.args, callResult);
-      if (url) noteSessionUrl(sessionId, url);
+      const action = asString(b.action);
+      const url = googleWorkspaceViewUrl(action, b.args, callResult);
+      if (!url) return;
+      // Keep the window on the slide it is already showing when the agent
+      // merely reads the deck; an edit moves it below.
+      const state = slideBySession.get(sessionId);
+      const keep = state && stripSlideFragment(url) === stripSlideFragment(state.baseUrl) && state.current;
+      noteSessionUrl(sessionId, keep ? slideUrl(state.baseUrl, state.current as string) : url);
+      if (action.startsWith("slides_")) noteSlidesCall(sessionId, action, b.args, callResult, url);
     },
     noteSessionComputerUse(sessionId) {
       if (!sessionId) return;
@@ -525,7 +785,25 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
       held.delete(sessionId);
       sawBusy.delete(sessionId);
       targetBySession.delete(sessionId);
+      slideBySession.delete(sessionId);
       stop(sessionId);
+    },
+    stepSlide(sessionId, delta) {
+      const state = slideBySession.get(sessionId);
+      const ids = state?.outline?.slideIds ?? [];
+      if (!state || ids.length === 0) {
+        // Nothing to page through yet; a deck the agent only created but
+        // never read has no outline until the fetcher runs.
+        if (state) refreshOutline(sessionId, state);
+        return { ok: false };
+      }
+      const at = state.current ? ids.indexOf(state.current) : -1;
+      const index = Math.min(ids.length - 1, Math.max(0, (at === -1 ? 0 : at) + Math.trunc(delta)));
+      showSlide(sessionId, state, ids[index]);
+      return { ok: true, index, count: ids.length };
+    },
+    setSlideOutlineFetcher(fetcher) {
+      slideOutlineFetcher = fetcher;
     },
     dispose() {
       spatialEventsBroker.removeListener(listener);
@@ -540,3 +818,4 @@ export function createSpatialStreamCoordinator(relay: SpatialStreamRelay): Spati
 // consistent with `spatialEventsBroker` itself.
 export const spatialStreamRelay = createSpatialStreamRelay();
 export const spatialStreamCoordinator = createSpatialStreamCoordinator(spatialStreamRelay);
+spatialStreamRelay.setScreenControlHandler((sessionId, delta) => spatialStreamCoordinator.stepSlide(sessionId, delta));
